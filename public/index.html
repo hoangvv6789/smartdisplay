@@ -1,0 +1,1552 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartDisplay ADB Manager - BV Hồng Ngọc</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <!-- Vue 3 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+  <div id="app" class="flex flex-col min-h-screen">
+    
+    <!-- Navbar -->
+    <header class="bg-slate-800/90 border-b border-slate-700/80 sticky top-0 z-40 backdrop-blur">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+            <i class="fa-solid fa-tv text-white text-lg"></i>
+          </div>
+          <div>
+            <h1 class="text-lg font-bold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent leading-none">
+              SmartDisplay ADB Manager
+            </h1>
+            <span class="text-xs text-slate-400">Bệnh viện Đa khoa Hồng Ngọc</span>
+          </div>
+        </div>
+
+        <!-- System, RAM & ADB Status Badge -->
+        <div class="flex items-center space-x-3">
+          <div class="hidden md:flex items-center space-x-2 bg-slate-950/60 px-3 py-1.5 rounded-lg border border-slate-700/50 text-xs">
+            <span class="w-2 h-2 rounded-full" :class="systemStatus.adbAvailable ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'"></span>
+            <span class="text-slate-300">ADB:</span>
+            <span class="font-mono text-emerald-400">{{ systemStatus.adbAvailable ? 'Sẵn sàng' : 'Không tìm thấy' }}</span>
+            <span class="text-slate-600">|</span>
+            <span class="text-slate-400">Đã kết nối:</span>
+            <span class="font-bold text-amber-400">{{ connectedCount }} TB</span>
+            <button v-if="connectedCount > 0 || (systemStatus.connectedDevicesCount > 0)" @click="disconnectAllAdb" class="ml-1 text-[10px] text-red-400 hover:text-red-300 underline font-medium" title="Ngắt kết nối tất cả thiết bị ADB">
+              (Ngắt hết)
+            </button>
+            <span class="text-slate-600">|</span>
+            <span class="text-slate-400">RAM:</span>
+            <span class="font-mono text-emerald-400 font-bold">{{ systemStatus.memory?.rss || '---' }}</span>
+            <span class="text-slate-500 font-mono text-[10px]">(PID: {{ systemStatus.pid }})</span>
+          </div>
+
+          <!-- Action Buttons -->
+          <!-- Launcher & Screen Watchdog Toggle Button (4 hours cycle) -->
+          <button 
+            @click="toggleWatchdog" 
+            :disabled="watchdogUpdating"
+            class="flex items-center space-x-1.5 text-xs font-semibold px-3 py-2 rounded-lg border transition shadow-sm"
+            :class="watchdog.enabled ? 'bg-emerald-600/25 border-emerald-500 text-emerald-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'"
+            :title="watchdog.enabled ? `Đang BẬT tự động canh giữ màn hình (${watchdog.intervalHours || 4} tiếng/lần): Tự phục hồi Launcher & Tự sửa trắng màn (giữ mã KH). Bấm để TẮT.` : `Bấm để BẬT tự động kiểm tra màn hình: Tự phục hồi Launcher + Tự sửa lỗi trắng màn 4 tiếng/lần`"
+          >
+            <i class="fa-solid fa-shield-halved text-xs" :class="watchdog.enabled ? 'text-emerald-400 animate-pulse' : 'text-slate-500'"></i>
+            <span>{{ watchdog.enabled ? `Canh Giữ Màn Hình: BẬT (${watchdog.intervalHours || 4}h)` : 'Canh Giữ Màn Hình (4h)' }}</span>
+            <span v-if="watchdog.running" class="ml-1 text-[10px] text-amber-300 font-mono animate-spin">
+              <i class="fa-solid fa-circle-notch"></i>
+            </span>
+          </button>
+
+          <button 
+            @click="toggleWindowsAutostart" 
+            class="flex items-center space-x-1.5 text-xs font-semibold px-3 py-2 rounded-lg border transition shadow-sm"
+            :class="windowsAutostart ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'"
+            :title="windowsAutostart ? 'Phần mềm ĐANG TỰ ĐỘNG KHỞI ĐỘNG CÙNG WINDOWS. Bấm để tắt.' : 'Bấm để TỰ ĐỘNG KHỞI ĐỘNG PHẦN MỀM KHI BẬT MÁY TÍNH WINDOWS'"
+          >
+            <i class="fa-solid fa-power-off text-xs" :class="windowsAutostart ? 'text-indigo-400 animate-pulse' : 'text-slate-500'"></i>
+            <span>{{ windowsAutostart ? 'Tự Chạy Cùng Win: BẬT' : 'Tự Chạy Cùng Win' }}</span>
+          </button>
+
+          <button @click="openCloudSyncModal" class="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg shadow transition">
+            <i class="fa-solid fa-cloud-arrow-down"></i>
+            <span>Cào & Đồng Bộ Dữ Liệu</span>
+          </button>
+          
+          <!-- DEDICATED APK STORE MODAL BUTTON (NO DEVICE CONNECT TRIGGER) -->
+          <button @click="showApkStoreModal = true" class="flex items-center space-x-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold px-3 py-2 rounded-lg transition">
+            <i class="fa-brands fa-android text-emerald-400"></i>
+            <span>Kho APK ({{ apks.length }})</span>
+          </button>
+
+          <button @click="openAddDeviceModal" class="flex items-center space-x-1.5 bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold px-3 py-2 rounded-lg transition">
+            <i class="fa-solid fa-plus"></i>
+            <span>Thêm TB Mới</span>
+          </button>
+
+          <button @click="fetchAllData" :disabled="loading" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition" title="Làm mới">
+            <i class="fa-solid fa-rotate" :class="{'fa-spin': loading}"></i>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      
+      <!-- Stats Overview -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700/60 shadow-sm flex items-center space-x-4">
+          <div class="p-3 bg-blue-500/10 text-blue-400 rounded-xl text-xl">
+            <i class="fa-solid fa-layer-group"></i>
+          </div>
+          <div>
+            <div class="text-2xl font-bold text-slate-100">{{ devices.length }}</div>
+            <div class="text-xs text-slate-400">Tổng thiết bị</div>
+          </div>
+        </div>
+
+        <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700/60 shadow-sm flex items-center space-x-4">
+          <div class="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl text-xl">
+            <i class="fa-solid fa-circle-nodes"></i>
+          </div>
+          <div>
+            <div class="text-2xl font-bold text-emerald-400">{{ connectedCount }}</div>
+            <div class="text-xs text-slate-400">ADB Kết nối</div>
+          </div>
+        </div>
+
+        <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700/60 shadow-sm flex items-center space-x-4">
+          <div class="p-3 bg-amber-500/10 text-amber-400 rounded-xl text-xl">
+            <i class="fa-solid fa-network-wired"></i>
+          </div>
+          <div>
+            <div class="text-2xl font-bold text-amber-400">{{ lanOnlineCount }}</div>
+            <div class="text-xs text-slate-400">Cổng ADB Mở (5555)</div>
+          </div>
+        </div>
+
+        <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700/60 shadow-sm flex items-center space-x-4">
+          <div class="p-3 bg-purple-500/10 text-purple-400 rounded-xl text-xl">
+            <i class="fa-solid fa-hospital-user"></i>
+          </div>
+          <div>
+            <div class="text-2xl font-bold text-purple-400">{{ uniqueGroups.length }}</div>
+            <div class="text-xs text-slate-400">Phòng ban / Nhóm</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Filter, Search & Batch Bar (Single Line Unified Layout) -->
+      <div class="bg-slate-800/90 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+        <div class="flex items-center gap-2.5 overflow-x-auto pb-0.5">
+          <!-- Search input (Flex-1) -->
+          <div class="relative flex-1 min-w-[220px]">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+            <input 
+              v-model="searchQuery" 
+              type="text" 
+              placeholder="Tìm tên, mã kích hoạt, IP, MAC, phòng..." 
+              class="w-full bg-slate-900 border border-slate-700 text-slate-100 pl-8 pr-7 py-1.5 rounded-lg text-xs focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition placeholder-slate-500"
+            >
+            <button v-if="searchQuery" @click="searchQuery = ''" class="absolute right-2.5 top-2 text-slate-400 hover:text-slate-200">
+              <i class="fa-solid fa-xmark text-xs"></i>
+            </button>
+          </div>
+
+          <!-- Group select -->
+          <select v-model="selectedGroup" class="bg-slate-900 border border-slate-700 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg focus:outline-none focus:border-emerald-500 max-w-[180px] truncate flex-shrink-0">
+            <option value="">Tất cả phòng/nhóm ({{ devices.length }})</option>
+            <option v-for="g in uniqueGroups" :key="g" :value="g">{{ g }}</option>
+          </select>
+
+          <!-- Status select -->
+          <select v-model="selectedStatus" class="bg-slate-900 border border-slate-700 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg focus:outline-none focus:border-emerald-500 flex-shrink-0">
+            <option value="all">Tất cả trạng thái</option>
+            <option value="connected">Đã kết nối ADB</option>
+            <option value="open_port">Cổng ADB mở (5555)</option>
+            <option value="cloud_online">Trạng thái Online</option>
+          </select>
+
+          <!-- Port scan button -->
+          <button @click="scanLanPorts" :disabled="scanningPorts" class="flex items-center space-x-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-1.5 rounded-lg transition flex-shrink-0" title="Kiểm tra cổng 5555 của tất cả thiết bị">
+            <i class="fa-solid fa-radar text-[11px]" :class="{'animate-spin': scanningPorts}"></i>
+            <span class="whitespace-nowrap">{{ scanningPorts ? 'Đang quét...' : 'Kiểm tra Cổng 5555' }}</span>
+          </button>
+
+          <!-- Quick Top Pagination Controls -->
+          <div v-if="totalPages > 1 && pageSize !== 'Tất cả'" class="flex items-center space-x-2 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-700 text-xs flex-shrink-0">
+            <span class="text-slate-400 font-mono text-[11px] whitespace-nowrap">Trang <b class="text-white">{{ currentPage }}</b>/{{ totalPages }}</span>
+            <div class="flex items-center space-x-0.5">
+              <button @click="setPage(currentPage - 1)" :disabled="currentPage === 1" class="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 flex items-center justify-center text-slate-300 transition" title="Trang trước">
+                <i class="fa-solid fa-chevron-left text-[9px]"></i>
+              </button>
+              <button @click="setPage(currentPage + 1)" :disabled="currentPage === totalPages" class="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 flex items-center justify-center text-slate-300 transition" title="Trang sau">
+                <i class="fa-solid fa-chevron-right text-[9px]"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Export Buttons -->
+          <div class="flex items-center space-x-1 flex-shrink-0">
+            <button 
+              @click="exportDevicesCsv" 
+              class="flex items-center space-x-1 bg-emerald-700/80 hover:bg-emerald-600 text-white text-xs px-2.5 py-1.5 rounded-lg border border-emerald-600 transition shadow-sm"
+              title="Xuất danh sách thiết bị hiện tại ra file Excel / CSV (Hỗ trợ tiếng Việt)"
+            >
+              <i class="fa-solid fa-file-excel text-[11px]"></i>
+              <span class="whitespace-nowrap font-medium">Xuất Excel</span>
+            </button>
+            <button 
+              @click="exportDevicesJson" 
+              class="flex items-center space-x-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-2 py-1.5 rounded-lg border border-slate-700 transition"
+              title="Xuất danh sách dạng file JSON"
+            >
+              <i class="fa-solid fa-file-code text-[11px]"></i>
+              <span>JSON</span>
+            </button>
+          </div>
+
+          <!-- View Mode Toggle -->
+          <div class="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-700 flex-shrink-0">
+            <button @click="viewMode = 'grid'" :class="viewMode === 'grid' ? 'bg-slate-700 text-emerald-400' : 'text-slate-400 hover:text-slate-200'" class="px-2 py-1 rounded text-xs transition" title="Xem dạng Lưới">
+              <i class="fa-solid fa-grip"></i>
+            </button>
+            <button @click="viewMode = 'table'" :class="viewMode === 'table' ? 'bg-slate-700 text-emerald-400' : 'text-slate-400 hover:text-slate-200'" class="px-2 py-1 rounded text-xs transition" title="Xem dạng Bảng">
+              <i class="fa-solid fa-list"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Batch Action Bar -->
+        <div v-if="selectedDeviceIds.length > 0" class="flex items-center justify-between bg-emerald-950/40 border border-emerald-800/60 px-4 py-2 rounded-lg text-xs animate-fadeIn">
+          <div class="flex items-center space-x-2 text-emerald-300">
+            <i class="fa-solid fa-check-double"></i>
+            <span>Đã chọn <b>{{ selectedDeviceIds.length }}</b> thiết bị</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <button @click="batchConnectAdb" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded transition">
+              <i class="fa-solid fa-plug mr-1"></i> Kết nối ADB
+            </button>
+            <button @click="batchRestoreLauncher" :disabled="batchRestoringLauncher" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded transition flex items-center space-x-1" title="Tự động kiểm tra màn hình: Nếu bị out Launcher thì kéo về, nếu bị lỗi trắng màn hình thì tự sửa lỗi và tải lại nội dung (giữ nguyên Mã KH)">
+              <i class="fa-solid fa-wand-magic-sparkles" :class="{'fa-spin': batchRestoringLauncher}"></i>
+              <span>{{ batchRestoringLauncher ? 'Đang quét & tự sửa...' : 'Quét & Tự Sửa Màn Hình' }}</span>
+            </button>
+            <button @click="batchSyncTime" :disabled="batchSyncingTime" class="bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded transition flex items-center space-x-1" title="Đồng bộ giờ từ máy chủ/máy tính xuống tất cả thiết bị đã chọn">
+              <i class="fa-solid fa-clock-rotate-left" :class="{'fa-spin': batchSyncingTime}"></i>
+              <span>{{ batchSyncingTime ? 'Đang đồng bộ giờ...' : 'Đồng bộ giờ' }}</span>
+            </button>
+            <button @click="batchFixWhiteScreen" :disabled="batchFixingWhiteScreen" class="bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded transition flex items-center space-x-1" title="Sửa lỗi trắng màn hình / treo cập nhật nội dung trên Android 10 (bảo lưu mã kích hoạt KH)">
+              <i class="fa-solid fa-wand-magic-sparkles" :class="{'fa-spin': batchFixingWhiteScreen}"></i>
+              <span>{{ batchFixingWhiteScreen ? 'Đang sửa...' : 'Sửa Lỗi Trắng Màn' }}</span>
+            </button>
+            <button @click="batchReboot" class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 rounded transition">
+              <i class="fa-solid fa-rotate mr-1"></i> Reboot
+            </button>
+            <button @click="openBatchInstallModal" class="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded transition">
+              <i class="fa-brands fa-android mr-1"></i> Cài đặt APK
+            </button>
+            <button @click="selectedDeviceIds = []" class="text-slate-400 hover:text-slate-200 px-2 py-1">
+              Bỏ chọn
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Device List: Grid View -->
+      <div v-if="viewMode === 'grid'" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div 
+          v-for="device in paginatedDevices" 
+          :key="device.id || device.ip" 
+          class="bg-slate-800/90 hover:bg-slate-800 border rounded-xl p-4 transition duration-200 flex flex-col justify-between shadow-sm relative group"
+          :class="device.adbConnected ? 'border-emerald-500/60 shadow-emerald-500/10' : (device.adbPortOpen ? 'border-amber-500/40' : 'border-slate-700/60')"
+        >
+          <div>
+            <div class="flex items-start justify-between mb-2">
+              <div class="flex items-center space-x-2.5">
+                <input 
+                  type="checkbox" 
+                  :value="device.id || device.ip" 
+                  v-model="selectedDeviceIds"
+                  class="rounded bg-slate-900 border-slate-700 text-emerald-500 focus:ring-emerald-500 h-4 w-4"
+                >
+                <div class="font-bold text-slate-100 text-sm truncate max-w-[170px]" :title="device.name">
+                  {{ device.name || 'Smart Display' }}
+                </div>
+              </div>
+
+              <div class="flex items-center space-x-1.5">
+                <span v-if="device.adbConnected" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1.5"></span> ADB Online
+                </span>
+                <span v-else-if="device.adbPortOpen" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  <span class="w-1.5 h-1.5 rounded-full bg-amber-400 mr-1.5"></span> Cổng 5555 Mở
+                </span>
+                <span v-else-if="device.status === 'online' || device.isConnected" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                  Online
+                </span>
+                <span v-else class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-700/60 text-slate-400">
+                  Offline
+                </span>
+
+                <button @click="openEditDeviceModal(device)" class="text-slate-400 hover:text-amber-400 p-1 transition" title="Chỉnh sửa thông tin / Đổi IP khi thay box">
+                  <i class="fa-solid fa-pen-to-square text-xs"></i>
+                </button>
+                <button @click="deleteDevice(device)" class="text-slate-400 hover:text-red-400 p-1 transition" title="Xóa thiết bị">
+                  <i class="fa-solid fa-trash text-xs"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Device Info details -->
+            <div class="space-y-1.5 my-3 text-xs text-slate-300">
+              <div class="flex items-center justify-between bg-slate-900/60 px-2.5 py-1 rounded-lg border border-slate-700/40">
+                <span class="text-slate-400 font-medium">Mã kích hoạt:</span>
+                <div class="flex items-center space-x-1.5">
+                  <span class="font-mono font-bold text-amber-400 text-sm select-all">{{ device.activeCode || '---' }}</span>
+                  <button v-if="device.activeCode" @click="copyText(device.activeCode, 'Đã copy Mã kích hoạt!')" class="text-slate-400 hover:text-amber-300 text-xs" title="Copy mã kích hoạt">
+                    <i class="fa-regular fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Địa chỉ IP:</span>
+                <span class="font-mono font-medium text-emerald-300 select-all">{{ device.ip || '---' }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-400">Phòng / Nhóm:</span>
+                <span class="font-medium text-slate-200 truncate max-w-[160px]">{{ device.group || device.room || 'Mặc định' }}</span>
+              </div>
+              <div v-if="device.mac" class="flex items-center justify-between">
+                <span class="text-slate-400">MAC / ID:</span>
+                <span class="font-mono text-slate-400 text-[11px] select-all">{{ device.mac }}</span>
+              </div>
+              <div v-if="device.model" class="flex items-center justify-between">
+                <span class="text-slate-400">Model:</span>
+                <span class="text-slate-300">{{ device.model }} <span v-if="device.os" class="text-slate-400">({{ device.os }})</span></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Buttons Bottom -->
+          <div class="pt-3 border-t border-slate-700/60 flex items-center justify-between gap-2">
+            <button 
+              v-if="!device.adbConnected"
+              @click="connectAdb(device)"
+              :disabled="device._connecting"
+              class="flex-1 flex items-center justify-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-1.5 px-3 rounded-lg transition"
+            >
+              <i class="fa-solid fa-plug" :class="{'fa-spin': device._connecting}"></i>
+              <span>{{ device._connecting ? 'Đang kết nối...' : 'Kết nối ADB' }}</span>
+            </button>
+            <button 
+              v-else
+              @click="disconnectAdb(device)"
+              :disabled="device._disconnecting"
+              class="flex-1 flex items-center justify-center space-x-1.5 bg-slate-700 hover:bg-red-600 text-slate-200 hover:text-white text-xs font-semibold py-1.5 px-3 rounded-lg transition"
+            >
+              <i class="fa-solid fa-plug-circle-xmark"></i>
+              <span>Ngắt kết nối</span>
+            </button>
+
+            <button 
+              @click="openControlModal(device)"
+              class="flex items-center space-x-1 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold py-1.5 px-3 rounded-lg border border-slate-600/50 transition"
+              title="Mở bảng điều khiển & sửa lỗi"
+            >
+              <i class="fa-solid fa-screwdriver-wrench text-amber-400"></i>
+              <span>Sửa lỗi</span>
+            </button>
+
+            <button 
+              @click="pingDevice(device)"
+              :disabled="device._pinging"
+              class="p-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition text-xs"
+              title="Ping kiểm tra kết nối"
+            >
+              <i class="fa-solid fa-satellite-dish" :class="{'fa-spin': device._pinging}"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Device List: Table View -->
+      <div v-else class="bg-slate-800/90 rounded-xl border border-slate-700/60 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs text-slate-300">
+            <thead class="bg-slate-900/80 text-slate-400 uppercase font-semibold border-b border-slate-700">
+              <tr>
+                <th class="p-3.5 w-10 text-center">
+                  <input type="checkbox" @change="toggleSelectAll" :checked="selectedDeviceIds.length > 0 && selectedDeviceIds.length === filteredDevices.length" class="rounded bg-slate-900 border-slate-700 text-emerald-500">
+                </th>
+                <th class="p-3.5">Tên Thiết Bị</th>
+                <th class="p-3.5">Mã Kích Hoạt</th>
+                <th class="p-3.5">Địa chỉ IP</th>
+                <th class="p-3.5">Phòng / Nhóm</th>
+                <th class="p-3.5">MAC / ID</th>
+                <th class="p-3.5">Trạng Thái</th>
+                <th class="p-3.5 text-right">Thao Tác</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/50">
+              <tr v-for="device in paginatedDevices" :key="device.id || device.ip" class="hover:bg-slate-700/40 transition">
+                <td class="p-3.5 text-center">
+                  <input type="checkbox" :value="device.id || device.ip" v-model="selectedDeviceIds" class="rounded bg-slate-900 border-slate-700 text-emerald-500">
+                </td>
+                <td class="p-3.5 font-semibold text-slate-100 flex items-center space-x-2">
+                  <i class="fa-solid fa-tv text-slate-500"></i>
+                  <span>{{ device.name || 'Smart Display' }}</span>
+                </td>
+                <td class="p-3.5">
+                  <span class="font-mono font-bold text-amber-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-700 select-all">{{ device.activeCode || '---' }}</span>
+                </td>
+                <td class="p-3.5 font-mono text-emerald-400 font-medium">{{ device.ip }}</td>
+                <td class="p-3.5">{{ device.group || device.room || 'Mặc định' }}</td>
+                <td class="p-3.5 font-mono text-slate-400 text-[11px]">{{ device.mac || '---' }}</td>
+                <td class="p-3.5">
+                  <span v-if="device.adbConnected" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1"></span> ADB Online
+                  </span>
+                  <span v-else-if="device.adbPortOpen" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400">
+                    Cổng 5555 Mở
+                  </span>
+                  <span v-else-if="device.status === 'online' || device.isConnected" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/20 text-blue-400">
+                    Online
+                  </span>
+                  <span v-else class="text-slate-500">Offline</span>
+                </td>
+                <td class="p-3.5 text-right space-x-1.5">
+                  <button 
+                    v-if="!device.adbConnected"
+                    @click="connectAdb(device)"
+                    class="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded text-xs transition"
+                  >
+                    Kết nối ADB
+                  </button>
+                  <button 
+                    v-else
+                    @click="disconnectAdb(device)"
+                    class="bg-slate-700 hover:bg-red-600 text-slate-200 hover:text-white px-2.5 py-1 rounded text-xs transition"
+                  >
+                    Ngắt
+                  </button>
+                  <button 
+                    @click="openControlModal(device)"
+                    class="bg-slate-700 hover:bg-slate-600 text-amber-400 px-2.5 py-1 rounded text-xs transition font-semibold"
+                  >
+                    <i class="fa-solid fa-wrench mr-1"></i> Điều khiển
+                  </button>
+                  <button @click="openEditDeviceModal(device)" class="text-slate-400 hover:text-amber-400 px-1.5 py-1" title="Chỉnh sửa">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                  </button>
+                  <button @click="deleteDevice(device)" class="text-slate-400 hover:text-red-400 px-1.5 py-1" title="Xóa">
+                    <i class="fa-solid fa-trash"></i>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      
+      <!-- PAGINATION BAR & RAM OPTIMIZER -->
+      <div v-if="filteredDevices.length > 0" class="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-900/80 p-4 rounded-xl border border-slate-800 text-xs">
+        <div class="flex items-center space-x-2 text-slate-400">
+          <span>Hiển thị</span>
+          <span class="font-bold text-white font-mono">
+            {{ pageSize === 'Tất cả' ? `1 - ${filteredDevices.length}` : `${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, filteredDevices.length)}` }}
+          </span>
+          <span>trong</span>
+          <span class="font-bold text-emerald-400 font-mono">{{ filteredDevices.length }}</span>
+          <span>thiết bị</span>
+        </div>
+
+        <!-- Page Switcher -->
+        <div class="flex items-center space-x-1" v-if="totalPages > 1 && pageSize !== 'Tất cả'">
+          <button 
+            @click="setPage(currentPage - 1)" 
+            :disabled="currentPage === 1"
+            class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-300 font-medium transition"
+          >
+            <i class="fa-solid fa-chevron-left text-[10px] mr-1"></i> Trước
+          </button>
+
+          <template v-for="(p, idx) in getPageNumbers()" :key="idx">
+            <span v-if="p === '...'" class="px-2 py-1.5 text-slate-500 font-bold">...</span>
+            <button 
+              v-else 
+              @click="setPage(p)"
+              :class="currentPage === p ? 'bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/30' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'"
+              class="w-8 h-8 rounded-lg flex items-center justify-center font-mono transition text-xs"
+            >
+              {{ p }}
+            </button>
+          </template>
+
+          <button 
+            @click="setPage(currentPage + 1)" 
+            :disabled="currentPage === totalPages"
+            class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-300 font-medium transition"
+          >
+            Sau <i class="fa-solid fa-chevron-right text-[10px] ml-1"></i>
+          </button>
+        </div>
+
+        <!-- Page size selector -->
+        <div class="flex items-center space-x-2 text-slate-400">
+          <span>Số lượng mỗi trang:</span>
+          <select 
+            v-model="pageSize" 
+            class="bg-slate-800 border border-slate-700 text-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 text-xs font-mono"
+          >
+            <option v-for="opt in pageSizeOptions" :key="opt" :value="opt">{{ opt }}</option>
+          </select>
+        </div>
+      </div>
+
+
+      <!-- Empty State -->
+      <div v-if="filteredDevices.length === 0" class="text-center py-16 bg-slate-800/40 rounded-xl border border-slate-700/50">
+        <div class="text-4xl text-slate-600 mb-3"><i class="fa-solid fa-tv"></i></div>
+        <div class="text-slate-300 font-semibold mb-1">Không tìm thấy thiết bị phù hợp</div>
+        <p class="text-slate-500 text-xs max-w-md mx-auto mb-4">
+          Hãy thử tìm theo từ khóa khác hoặc bấm nút "Cào & Đồng Bộ Dữ Liệu" để làm mới danh sách thiết bị.
+        </p>
+      </div>
+
+    </main>
+
+    <!-- DEDICATED KHO APK MODAL (INDEPENDENT FROM ANY CONNECTED DEVICE) -->
+    <div v-if="showApkStoreModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+        <div class="bg-slate-900/90 px-6 py-4 border-b border-slate-700 flex items-center justify-between">
+          <div class="flex items-center space-x-2.5">
+            <div class="w-9 h-9 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-lg">
+              <i class="fa-brands fa-android"></i>
+            </div>
+            <div>
+              <h3 class="font-bold text-slate-100 text-base">Kho Quản Lý File APK</h3>
+              <p class="text-xs text-slate-400">Xem danh sách file APK sẵn có, xóa bớt file cũ hoặc tải lên file mới</p>
+            </div>
+          </div>
+          <button @click="showApkStoreModal = false" class="text-slate-400 hover:text-slate-200 text-lg">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="p-6 space-y-6 overflow-y-auto">
+          <!-- OpenGApps System Package Uploader -->
+          <div class="bg-indigo-950/30 p-4 rounded-xl border border-indigo-700/50 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-2 text-indigo-300 text-xs font-bold">
+                <i class="fa-solid fa-box-archive text-base text-indigo-400"></i>
+                <span>Gói Hệ Thống: OpenGApps Pico x86-64 (Thư mục /system)</span>
+              </div>
+              <span v-if="openGAppsReady" class="text-[10px] bg-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded">Đã lưu trên Server</span>
+            </div>
+            <p class="text-[11px] text-slate-400">Tải lên file <b>.ZIP</b> chứa thư mục <code class="text-emerald-400 font-mono">system</code> (pico-8.1.zip). Server sẽ tự giải nén và lưu trữ để dùng fix cho tất cả màn hình.</p>
+            <div class="flex items-center space-x-3 pt-1">
+              <input type="file" ref="openGAppsZipInput" accept=".zip" class="text-xs text-slate-400 file:mr-4 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-indigo-300 hover:file:bg-slate-700 cursor-pointer">
+              <button @click="uploadOpenGAppsZip" :disabled="uploadingZip" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 flex-shrink-0">
+                <i class="fa-solid fa-cloud-arrow-up" :class="{'fa-spin': uploadingZip}"></i>
+                <span>{{ uploadingZip ? 'Đang giải nén...' : 'Tải lên Gói System' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Upload Box -->
+          <div class="bg-slate-900/80 p-4 rounded-xl border border-slate-700/70">
+            <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Tải Lên File APK Mới</h4>
+            <div class="flex items-center space-x-3">
+              <input type="file" ref="globalApkFileInput" accept=".apk" class="text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-emerald-400 hover:file:bg-slate-700 cursor-pointer">
+              <button @click="uploadApkGlobal" :disabled="uploadingApk" class="bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5">
+                <i class="fa-solid fa-cloud-arrow-up" :class="{'fa-spin': uploadingApk}"></i>
+                <span>{{ uploadingApk ? 'Đang tải lên...' : 'Tải lên Kho' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Existing APK List -->
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Danh Sách File APK Trong Kho ({{ apks.length }})</h4>
+              <span class="text-[11px] text-slate-500">Bấm icon 🗑️ để xóa file không dùng</span>
+            </div>
+
+            <div class="space-y-2.5">
+              <div v-for="apk in apks" :key="apk.id" class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-700/70 flex items-center justify-between hover:border-slate-600 transition">
+                <div class="flex items-center space-x-3 truncate mr-3">
+                  <div class="w-9 h-9 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-lg flex-shrink-0">
+                    <i class="fa-brands fa-android"></i>
+                  </div>
+                  <div class="truncate">
+                    <div class="font-bold text-slate-200 text-xs truncate">{{ apk.name }}</div>
+                    <div class="text-[11px] text-slate-400 font-mono truncate">{{ apk.fileName }} <span v-if="apk.size" class="text-emerald-400 font-sans">({{ apk.size }})</span></div>
+                  </div>
+                </div>
+
+                <button 
+                  @click="deleteApk(apk)" 
+                  class="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition flex-shrink-0" 
+                  title="Xóa file APK này khỏi kho"
+                >
+                  <i class="fa-solid fa-trash-can text-sm"></i>
+                </button>
+              </div>
+
+              <div v-if="apks.length === 0" class="text-center py-8 text-slate-500 text-xs">
+                Chưa có file APK nào trong kho lưu trữ.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-slate-900/90 px-6 py-3 border-t border-slate-700 flex justify-end">
+          <button @click="showApkStoreModal = false" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 rounded-lg text-xs font-semibold">
+            Đóng
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- DEVICE CONTROL & TROUBLESHOOTING MODAL -->
+    <div v-if="activeDeviceModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-6xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+        
+        <!-- Modal Header with Active Code -->
+        <div class="bg-slate-900/90 px-6 py-4 border-b border-slate-700/80 flex items-center justify-between">
+          <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-lg">
+              <i class="fa-solid fa-screwdriver-wrench"></i>
+            </div>
+            <div>
+              <div class="flex items-center space-x-2">
+                <h3 class="font-bold text-slate-100 text-base">{{ currentDevice?.name || 'Smart Display' }}</h3>
+                <span class="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-emerald-400 border border-slate-700">{{ currentDevice?.ip }}:5555</span>
+                <span v-if="currentDevice?.activeCode" class="font-mono text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">Mã KH: {{ currentDevice?.activeCode }}</span>
+                <span v-if="currentDevice?.adbConnected" class="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold">ADB Connected</span>
+              </div>
+              <p class="text-xs text-slate-400">{{ currentDevice?.group || currentDevice?.room }} | MAC: {{ currentDevice?.mac || 'N/A' }}</p>
+            </div>
+          </div>
+          <button @click="closeControlModal" class="text-slate-400 hover:text-slate-200 text-lg p-1">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <!-- Modal Tabs -->
+        <div class="bg-slate-900/60 px-6 border-b border-slate-700/80 flex items-center justify-between overflow-x-auto">
+          <div class="flex space-x-6 text-xs font-semibold">
+            <button 
+              v-for="tab in modalTabs" 
+              :key="tab.id"
+              @click="activeModalTab = tab.id"
+              class="py-3 border-b-2 flex items-center space-x-2 transition whitespace-nowrap"
+              :class="activeModalTab === tab.id ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'"
+            >
+              <i :class="tab.icon"></i>
+              <span>{{ tab.name }}</span>
+            </button>
+          </div>
+
+          <div class="flex items-center space-x-2 py-2">
+            <button 
+              @click="sendKey('KEYCODE_WAKEUP'); triggerQuickRefresh();"
+              class="text-xs px-2.5 py-1 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/40 transition flex items-center space-x-1"
+              title="Đánh thức màn hình sáng lại nếu đang bị đen/ngủ"
+            >
+              <i class="fa-solid fa-sun"></i>
+              <span>Bật Sáng Màn Hình</span>
+            </button>
+            <button 
+              @click="screenZoomed = !screenZoomed"
+              class="text-xs px-2.5 py-1 rounded-lg border transition flex items-center space-x-1.5"
+              :class="screenZoomed ? 'bg-indigo-600 border-indigo-500 text-white shadow' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'"
+              :title="screenZoomed ? 'Thu nhỏ Live View về cỡ chuẩn' : 'Phóng to Live View màn hình'"
+            >
+              <i class="fa-solid" :class="screenZoomed ? 'fa-compress' : 'fa-expand'"></i>
+              <span>{{ screenZoomed ? 'Thu nhỏ Màn hình' : 'Phóng to Màn hình' }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Modal Body Container (Vysor Full Screen & Remote Controls on Right) -->
+        <div class="flex-1 overflow-y-auto p-5 grid grid-cols-1 lg:grid-cols-12 gap-5 min-h-[540px]">
+
+          <!-- LEFT COLUMN: SỬA LỖI & QUẢN LÝ APP (5 COLS) -->
+          <div class="lg:col-span-5 space-y-4 overflow-y-auto max-h-[75vh] pr-1">
+
+            <!-- TAB 1: SỬA LỖI NHANH CHO ỨNG DỤNG & HỆ THỐNG -->
+            <div v-if="activeModalTab === 'quick_fix'" class="space-y-4">
+              
+              <!-- 1. CHỌN ỨNG DỤNG & 3 LỆNH KHẮC PHỤC SỰ CỐ -->
+              <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-700/80 space-y-3 shadow-sm">
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center space-x-2 text-slate-200">
+                    <i class="fa-brands fa-android text-emerald-400 text-base"></i>
+                    <span class="text-xs font-bold uppercase tracking-wider">Sửa Lỗi Nhanh Cho Ứng Dụng</span>
+                  </div>
+                </div>
+
+                <!-- Quick App Chips -->
+                <div class="flex flex-wrap gap-1.5">
+                  <button 
+                    v-for="preset in appPresets" 
+                    :key="preset.pkg"
+                    @click="customPackage = preset.pkg"
+                    class="px-2 py-1 rounded-lg text-xs font-medium border transition flex items-center space-x-1"
+                    :class="customPackage === preset.pkg ? 'bg-emerald-600 border-emerald-500 text-white shadow' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'"
+                  >
+                    <i :class="preset.icon"></i>
+                    <span>{{ preset.name }}</span>
+                  </button>
+                </div>
+
+                <!-- Dropdown Selector -->
+                <div>
+                  <select v-model="customPackage" class="w-full bg-slate-800 border border-slate-700 text-slate-200 text-xs px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500 font-medium">
+                    <option value="vn.adtcreative.hongngocdisplay">⭐ Smart Display (vn.adtcreative.hongngocdisplay)</option>
+                    <option value="vn.adtcreative.webviewhongngoc">⭐ Webview Hong Ngoc (vn.adtcreative.webviewhongngoc)</option>
+                    <option value="com.hongngoc.itrapps">⭐ ITR Apps (com.hongngoc.itrapps)</option>
+                    <option value="vn.hongngoc.smartdisplay">⭐ Smart Display Client (vn.hongngoc.smartdisplay)</option>
+                    <option v-for="pkg in installedPackages" :key="pkg" :value="pkg">📱 {{ pkg }}</option>
+                  </select>
+                </div>
+
+                <!-- 4 Action buttons (Khởi Động Lại, Sửa Trắng Màn, Xóa Dữ Liệu, Khởi Động Box) -->
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                  <button 
+                    @click="actionRestartApp" 
+                    :disabled="actionLoading"
+                    class="bg-blue-950/40 hover:bg-blue-900/50 border border-blue-700/50 p-2.5 rounded-xl text-left transition flex flex-col justify-between group"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="w-6 h-6 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center text-xs">
+                        <i class="fa-solid fa-arrows-rotate" :class="{'fa-spin': actionLoading}"></i>
+                      </div>
+                      <span class="text-[8px] bg-blue-500/10 text-blue-300 px-1 py-0.5 rounded font-mono">Force Stop</span>
+                    </div>
+                    <div>
+                      <div class="font-bold text-slate-100 text-xs group-hover:text-blue-300">Khởi Động Lại</div>
+                      <div class="text-[9px] text-slate-400 mt-0.5">Tắt & Mở lại</div>
+                    </div>
+                  </button>
+
+                  <button 
+                    @click="actionFixWhiteScreen" 
+                    :disabled="actionLoading"
+                    class="bg-rose-950/40 hover:bg-rose-900/50 border border-rose-700/50 p-2.5 rounded-xl text-left transition flex flex-col justify-between group"
+                    title="Xóa sạch cache, lịch phát lỗi và kích hoạt tải lại nội dung mới từ server mà KHÔNG làm mất Mã kích hoạt (KH)"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="w-6 h-6 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center text-xs">
+                        <i class="fa-solid fa-wand-magic-sparkles" :class="{'fa-spin': actionLoading}"></i>
+                      </div>
+                      <span class="text-[8px] bg-rose-500/10 text-rose-300 px-1 py-0.5 rounded font-mono">Giữ Mã KH</span>
+                    </div>
+                    <div>
+                      <div class="font-bold text-slate-100 text-xs group-hover:text-rose-300">Sửa Trắng Màn</div>
+                      <div class="text-[9px] text-slate-400 mt-0.5">Xóa lỗi & Giữ Mã</div>
+                    </div>
+                  </button>
+
+                  <button 
+                    @click="actionClearData" 
+                    :disabled="actionLoading"
+                    class="bg-amber-950/40 hover:bg-amber-900/50 border border-amber-700/50 p-2.5 rounded-xl text-left transition flex flex-col justify-between group"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center text-xs">
+                        <i class="fa-solid fa-broom" :class="{'fa-spin': actionLoading}"></i>
+                      </div>
+                      <span class="text-[8px] bg-amber-500/10 text-amber-300 px-1 py-0.5 rounded font-mono">pm clear</span>
+                    </div>
+                    <div>
+                      <div class="font-bold text-slate-100 text-xs group-hover:text-amber-300">Xóa Dữ Liệu</div>
+                      <div class="text-[9px] text-slate-400 mt-0.5">Reset sạch cache</div>
+                    </div>
+                  </button>
+
+                  <button 
+                    @click="actionReboot" 
+                    :disabled="actionLoading"
+                    class="bg-red-950/40 hover:bg-red-900/50 border border-red-700/50 p-2.5 rounded-xl text-left transition flex flex-col justify-between group"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="w-6 h-6 rounded-lg bg-red-500/20 text-red-400 flex items-center justify-center text-xs">
+                        <i class="fa-solid fa-power-off"></i>
+                      </div>
+                      <span class="text-[8px] bg-red-500/10 text-red-300 px-1 py-0.5 rounded font-mono">reboot</span>
+                    </div>
+                    <div>
+                      <div class="font-bold text-slate-100 text-xs group-hover:text-red-300">Khởi Động Box</div>
+                      <div class="text-[9px] text-slate-400 mt-0.5">Reboot Android</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <!-- 2. CÔNG CỤ HỆ THỐNG NÂNG CAO (PHÁ PASS, FACTORY RESET, GOOGLE PLAY, OPENGAPPS) -->
+              <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700/60 space-y-3">
+                <div class="flex items-center justify-between cursor-pointer select-none" @click="showAdvancedTools = !showAdvancedTools">
+                  <div class="flex items-center space-x-2">
+                    <i class="fa-solid fa-sliders text-amber-400"></i>
+                    <span class="text-xs font-bold text-slate-300 uppercase tracking-wider">Khắc Phục Hệ Thống (Ít Dùng)</span>
+                  </div>
+                  <div class="flex items-center space-x-2">
+                    <span v-if="isGmsDisabled" class="text-[10px] bg-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded">Google Play Đã TẮT</span>
+                    <span v-else class="text-[10px] bg-amber-500/20 text-amber-400 font-bold px-2 py-0.5 rounded">Google Play BẬT</span>
+                    <i class="fa-solid text-slate-400 text-xs transition" :class="showAdvancedTools ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                  </div>
+                </div>
+
+                <div v-show="showAdvancedTools" class="space-y-3 pt-2">
+                  <!-- 1. PHÁ PASS / BYPASS LOCKSCREEN -->
+                  <div class="bg-indigo-950/30 p-2.5 rounded-lg border border-indigo-700/50 flex items-center justify-between">
+                    <div>
+                      <div class="flex items-center space-x-1.5 text-xs font-bold text-indigo-300">
+                        <i class="fa-solid fa-unlock-keyhole text-amber-400"></i>
+                        <span>Phá Pass / Xóa Mã Khóa Màn Hình</span>
+                      </div>
+                      <p class="text-[10px] text-slate-400 mt-0.5">
+                        Xóa mật khẩu, mã PIN & hình vẽ mở khóa không mất dữ liệu của máy.
+                      </p>
+                    </div>
+                    <button @click="actionRemoveLockscreen" :disabled="actionLoading" class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-1.5 px-3 rounded-lg shadow transition flex items-center space-x-1 flex-shrink-0">
+                      <i class="fa-solid fa-key text-amber-300"></i>
+                      <span>Phá Pass Ngay</span>
+                    </button>
+                  </div>
+
+                  <!-- 2. KHÔI PHỤC CÀI ĐẶT GỐC (FACTORY RESET) -->
+                  <div class="bg-red-950/20 p-2.5 rounded-lg border border-red-800/40">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-xs font-bold text-red-300">Khôi Phục Cài Đặt Gốc (Factory Reset)</span>
+                      <div class="flex space-x-1">
+                        <button @click="actionFactoryReset('android8')" :disabled="actionLoading" class="bg-red-600 hover:bg-red-500 text-white text-[10px] py-1 px-1.5 rounded font-bold">
+                          Reset Android 8
+                        </button>
+                        <button @click="actionFactoryReset('android10')" :disabled="actionLoading" class="bg-amber-700 hover:bg-amber-600 text-white text-[10px] py-1 px-1.5 rounded font-bold" title="Tự động ghi --wipe_data vào recovery và reboot">
+                          Reset Android 10+
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 3. GOOGLE PLAY SERVICES TOGGLE -->
+                  <div class="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700/60 flex flex-col justify-between" :class="isGmsDisabled ? 'border-emerald-700/60 bg-emerald-950/20' : 'border-amber-700/60 bg-amber-950/20'">
+                    <div class="flex items-center justify-between mb-1.5">
+                      <span class="text-xs font-bold" :class="isGmsDisabled ? 'text-emerald-300' : 'text-amber-300'">Google Play Services</span>
+                      <div class="flex space-x-1">
+                        <button @click="clearGooglePlayCache" :disabled="actionLoading" class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] py-1 px-1.5 rounded">
+                          Xóa Cache
+                        </button>
+                        <button v-if="!isGmsDisabled" @click="toggleGooglePlay(false)" :disabled="actionLoading" class="bg-amber-600 hover:bg-amber-500 text-white text-[10px] py-1 px-2 rounded font-bold">
+                          Tắt Vĩnh Viễn
+                        </button>
+                        <button v-else @click="toggleGooglePlay(true)" :disabled="actionLoading" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] py-1 px-2 rounded font-bold">
+                          Bật Lại
+                        </button>
+                      </div>
+                    </div>
+                    <p class="text-[10px] text-slate-400">
+                      {{ isGmsDisabled ? 'Đang TẮT để triệt tiêu popup lỗi che màn hình.' : 'Tắt Google Play để hết hiện popup dừng app.' }}
+                    </p>
+                  </div>
+
+                  <!-- 4. 1-CLICK OPENGAPPS PICO -->
+                  <div class="bg-gradient-to-r from-indigo-950/60 to-purple-950/40 p-3 rounded-xl border border-indigo-500/40 space-y-2">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center space-x-1.5 text-indigo-300">
+                        <i class="fa-solid fa-wand-magic-sparkles text-amber-400 text-xs"></i>
+                        <span class="text-xs font-bold">Nạp OpenGApps Pico x86_64</span>
+                      </div>
+                      <span v-if="openGAppsReady" class="text-[9px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/30">Sẵn Sàng</span>
+                      <span v-else class="text-[9px] font-semibold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30">Chưa có ZIP</span>
+                    </div>
+                    <p class="text-[10px] text-slate-400">
+                      Tự động: remount &rarr; push system &rarr; Factory Reset fix triệt để lỗi crash.
+                    </p>
+                    <div class="flex items-center justify-between gap-2 pt-1">
+                      <div class="text-[10px] text-slate-400 truncate">
+                        Nguồn: <b class="text-emerald-400 font-mono">{{ openGAppsPath || 'Chưa có file' }}</b>
+                      </div>
+                      <button 
+                        @click="actionInstallOpenGApps" 
+                        :disabled="actionLoading"
+                        class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg transition flex items-center space-x-1 shadow flex-shrink-0"
+                      >
+                        <i class="fa-solid fa-bolt text-amber-300" :class="{'fa-spin': actionLoading}"></i>
+                        <span>1-Click Nạp & Reset</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- TAB 2: QUẢN LÝ APK -->
+            <div v-if="activeModalTab === 'apk_manager'" class="space-y-4">
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Kho APK Sẵn Có ({{ apks.length }})</h4>
+                </div>
+
+                <div class="space-y-2">
+                  <div v-for="apk in apks" :key="apk.id" class="bg-slate-900/80 p-2.5 rounded-xl border border-slate-700/70 flex items-center justify-between hover:border-slate-600 transition">
+                    <div class="flex items-center space-x-2.5 truncate mr-2">
+                      <div class="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-sm flex-shrink-0">
+                        <i class="fa-brands fa-android"></i>
+                      </div>
+                      <div class="truncate">
+                        <div class="font-bold text-slate-200 text-xs truncate" :title="apk.name">{{ apk.name }}</div>
+                        <div class="text-[10px] text-slate-400 font-mono truncate">{{ apk.fileName }} <span v-if="apk.size" class="text-emerald-400">({{ apk.size }})</span></div>
+                      </div>
+                    </div>
+
+                    <button 
+                      @click="installApkToDevice(apk)" 
+                      :disabled="apk._installing"
+                      class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-2.5 py-1 rounded-lg transition flex items-center space-x-1 flex-shrink-0"
+                    >
+                      <i class="fa-solid fa-download" :class="{'fa-spin': apk._installing}"></i>
+                      <span>{{ apk._installing ? 'Đang cài...' : 'Cài ngay' }}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="space-y-2 pt-2 border-t border-slate-800">
+                <div class="flex items-center justify-between">
+                  <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Ứng Dụng Đang Cài ({{ filteredInstalledPackages.length }})</h4>
+                  <button @click="fetchInstalledPackages" class="text-xs text-emerald-400 hover:underline p-1">
+                    <i class="fa-solid fa-rotate mr-1" :class="{'fa-spin': loadingPackages}"></i> Làm mới
+                  </button>
+                </div>
+
+                <div class="flex items-center space-x-1.5">
+                  <input 
+                    v-model="pkgSearchQuery" 
+                    type="text" 
+                    placeholder="Lọc package..." 
+                    class="flex-1 bg-slate-900 border border-slate-700 text-slate-200 text-xs px-2 py-1 rounded-lg focus:outline-none"
+                  >
+                  <button 
+                    @click="showAllSystemPackages = !showAllSystemPackages; fetchInstalledPackages()" 
+                    class="text-[11px] px-2 py-1 rounded-lg border transition whitespace-nowrap"
+                    :class="showAllSystemPackages ? 'bg-purple-950/50 border-purple-600 text-purple-300' : 'bg-slate-900 border-slate-700 text-slate-400'"
+                  >
+                    {{ showAllSystemPackages ? 'Tất cả' : 'App ngoài' }}
+                  </button>
+                </div>
+
+                <div class="bg-slate-900/80 rounded-xl border border-slate-700/70 max-h-48 overflow-y-auto divide-y divide-slate-800">
+                  <div v-for="pkg in filteredInstalledPackages" :key="pkg" class="p-2 flex items-center justify-between text-xs hover:bg-slate-800/40 transition">
+                    <div class="flex items-center space-x-1.5 font-mono truncate mr-2">
+                      <span :class="isHospitalPackage(pkg) ? 'text-emerald-400 font-bold' : 'text-slate-300'" class="truncate text-[11px]">{{ pkg }}</span>
+                    </div>
+                    <div class="flex space-x-1 flex-shrink-0">
+                      <button @click="customPackage = pkg; activeModalTab = 'quick_fix'" class="text-emerald-400 hover:text-emerald-300 text-[10px] px-1.5 py-0.5 bg-emerald-500/10 rounded">
+                        Chọn
+                      </button>
+                      <button @click="uninstallPackage(pkg)" class="text-red-400 hover:text-red-300 text-[10px] px-1.5 py-0.5 bg-red-500/10 rounded">
+                        Gỡ
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 3: REALTIME LOGCAT -->
+            <div v-if="activeModalTab === 'logcat'" class="space-y-2.5">
+              <div class="flex flex-wrap gap-1.5 items-center justify-between bg-slate-900/80 p-2 rounded-xl border border-slate-700/70 text-xs">
+                <div class="flex items-center space-x-1.5">
+                  <button 
+                    @click="toggleLogcatStream" 
+                    :class="isLogcatActive ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-600 hover:bg-emerald-500'"
+                    class="text-white font-semibold px-2 py-1 rounded flex items-center space-x-1 text-xs"
+                  >
+                    <i class="fa-solid" :class="isLogcatActive ? 'fa-pause' : 'fa-play'"></i>
+                    <span>{{ isLogcatActive ? 'Tạm dừng' : 'Bắt đầu log' }}</span>
+                  </button>
+
+                  <select v-model="logLevel" @change="restartLogcatWithLevel" class="bg-slate-800 border border-slate-700 text-slate-200 text-[11px] px-2 py-1 rounded">
+                    <option value="">Level: Tất cả</option>
+                    <option value="D">Debug (*:D)</option>
+                    <option value="I">Info (*:I)</option>
+                    <option value="W">Warning (*:W)</option>
+                    <option value="E">Chỉ Lỗi (*:E)</option>
+                  </select>
+                </div>
+
+                <div class="flex items-center space-x-1">
+                  <button @click="clearLogcat" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-700 text-xs" title="Xóa màn hình log">
+                    <i class="fa-solid fa-trash-can"></i>
+                  </button>
+                  <button @click="downloadLogcat" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-700 text-xs" title="Tải file log .txt">
+                    <i class="fa-solid fa-file-arrow-down"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div ref="logcatContainer" class="bg-black/90 text-emerald-400 font-mono text-[10px] p-3 rounded-xl border border-slate-700/80 h-96 overflow-y-auto whitespace-pre-wrap leading-relaxed shadow-inner">
+                <div v-for="(line, idx) in filteredLogcatLines" :key="idx" :class="getLogLineClass(line)">{{ line }}</div>
+                <div v-if="filteredLogcatLines.length === 0" class="text-slate-600 text-center py-16 text-xs">
+                  Chưa có nhật ký logcat. Bấm "Bắt đầu log" để stream trực tiếp.
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 4: ADB SHELL -->
+            <div v-if="activeModalTab === 'shell'" class="space-y-2.5">
+              <div class="bg-slate-900/80 p-2 rounded-xl border border-slate-700/70 text-xs flex flex-wrap gap-1 items-center justify-between">
+                <div class="flex flex-wrap gap-1">
+                  <button @click="runQuickShell('getprop ro.product.model; getprop ro.build.version.release')" class="bg-slate-800 hover:bg-slate-700 px-1.5 py-0.5 rounded text-[10px] text-slate-300">Model</button>
+                  <button @click="runQuickShell('wm size')" class="bg-slate-800 hover:bg-slate-700 px-1.5 py-0.5 rounded text-[10px] text-slate-300">Resolution</button>
+                  <button @click="runQuickShell('df -h')" class="bg-slate-800 hover:bg-slate-700 px-1.5 py-0.5 rounded text-[10px] text-slate-300">Bộ nhớ</button>
+                </div>
+                <button @click="shellHistory = []" class="text-slate-400 hover:text-slate-200 text-[11px]">Xóa</button>
+              </div>
+
+              <div class="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden flex flex-col h-96">
+                <div class="flex-1 p-3 font-mono text-xs overflow-y-auto space-y-2">
+                  <div v-for="(item, idx) in shellHistory" :key="idx">
+                    <div class="text-emerald-400 flex items-center space-x-1 text-xs">
+                      <span class="text-slate-500">$</span>
+                      <span class="font-bold">{{ item.cmd }}</span>
+                    </div>
+                    <pre class="text-slate-300 text-[10px] mt-0.5 pl-2 border-l border-slate-800 whitespace-pre-wrap">{{ item.output }}</pre>
+                  </div>
+                  <div v-if="shellHistory.length === 0" class="text-slate-600 text-center py-16 text-xs">
+                    Nhập lệnh ADB Shell và nhấn Enter (ví dụ: ls -l, ping 8.8.8.8, ps)
+                  </div>
+                </div>
+                <div class="bg-slate-900 border-t border-slate-800 p-2 flex items-center space-x-2">
+                  <span class="text-emerald-400 font-mono font-bold pl-1 text-xs">shell$</span>
+                  <input 
+                    v-model="shellCommand" 
+                    @keyup.enter="execShellCommand"
+                    type="text" 
+                    placeholder="Gõ lệnh shell..." 
+                    class="flex-1 bg-transparent text-slate-100 font-mono text-xs focus:outline-none"
+                  >
+                  <button @click="execShellCommand" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-2.5 py-1 rounded font-semibold transition">
+                    Chạy
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 5: THÔNG SỐ MÁY -->
+            <div v-if="activeModalTab === 'device_info'" class="space-y-3">
+              <div class="flex justify-between items-center">
+                <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Thông Số Phần Cứng</h4>
+                <button @click="loadDeviceInfo" class="text-xs text-emerald-400 hover:underline">
+                  <i class="fa-solid fa-rotate mr-1"></i> Làm mới
+                </button>
+              </div>
+
+              <div v-if="deviceInfo" class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-700/70 space-y-1.5 text-xs">
+                <div class="flex justify-between"><span class="text-slate-400">Model:</span> <span class="font-bold text-slate-200">{{ deviceInfo.model }}</span></div>
+                <div class="flex justify-between"><span class="text-slate-400">Hãng:</span> <span class="text-slate-200">{{ deviceInfo.brand || 'Android' }}</span></div>
+                <div class="flex justify-between"><span class="text-slate-400">Android OS:</span> <span class="text-emerald-400 font-semibold">Android {{ deviceInfo.androidVersion }}</span></div>
+                <div class="flex justify-between"><span class="text-slate-400">Độ phân giải:</span> <span class="font-mono text-slate-200">{{ deviceInfo.resolution }}</span></div>
+                <div class="flex justify-between"><span class="text-slate-400">Mã kích hoạt:</span> <span class="text-amber-400 font-mono font-bold">{{ currentDevice?.activeCode || 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-slate-400">Bộ nhớ:</span> <span class="text-slate-200">{{ deviceInfo.storage || 'N/A' }}</span></div>
+                <div class="flex justify-between items-center py-1">
+                  <span class="text-slate-400">Thời gian máy:</span>
+                  <div class="flex items-center space-x-2">
+                    <span class="text-slate-200 font-mono">{{ deviceInfo.time || 'N/A' }}</span>
+                    <button @click="actionSyncTime" class="px-2 py-1 text-[10px] bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded flex items-center space-x-1 transition" title="Đồng bộ giờ từ máy chủ">
+                      <i class="fa-solid fa-clock-rotate-left"></i>
+                      <span>Đồng bộ</span>
+                    </button>
+                  </div>
+                </div>
+                <div class="flex justify-between"><span class="text-slate-400">Địa chỉ IP:</span> <span class="text-emerald-400 font-mono">{{ currentDevice?.ip }}</span></div>
+                <div class="flex justify-between"><span class="text-slate-400">Địa chỉ MAC:</span> <span class="text-slate-300 font-mono">{{ currentDevice?.mac || 'N/A' }}</span></div>
+              </div>
+              <div v-else class="text-center py-16 text-slate-500 text-xs">
+                <i class="fa-solid fa-spinner fa-spin text-2xl mb-2 block"></i>
+                Đang tải thông số thiết bị...
+              </div>
+            </div>
+
+          </div>
+
+          <!-- RIGHT COLUMN: PINNED VYSOR LIVE SCREEN + COMPLETE REMOTE CONTROLLER (7 COLS) -->
+          <div class="lg:col-span-7 flex flex-col bg-slate-900/95 p-3.5 rounded-xl border border-slate-700/80 space-y-3 shadow-2xl">
+            
+            <!-- Vysor Top Quick Action Bar -->
+            <div class="flex items-center justify-between bg-slate-950/90 px-2.5 py-1.5 rounded-lg border border-slate-800 text-xs">
+              <div class="flex items-center space-x-1">
+                <button @click="sendKey('KEYCODE_BACK'); triggerQuickRefresh();" class="p-1.5 bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-slate-300 rounded text-xs transition" title="Back / Quay lại (Chuột phải)">
+                  <i class="fa-solid fa-arrow-left"></i>
+                </button>
+                <button @click="sendKey('KEYCODE_HOME'); triggerQuickRefresh();" class="p-1.5 bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-slate-300 rounded text-xs transition" title="Home / Trang chủ (Chuột giữa)">
+                  <i class="fa-solid fa-house"></i>
+                </button>
+                <button @click="sendKey('KEYCODE_APP_SWITCH'); triggerQuickRefresh();" class="p-1.5 bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-purple-300 rounded text-xs transition" title="Đa nhiệm / Recent Apps">
+                  <i class="fa-solid fa-window-restore"></i>
+                </button>
+                <button @click="sendKey('KEYCODE_WAKEUP'); triggerQuickRefresh();" class="p-1.5 bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-amber-400 rounded text-xs transition" title="Mở khóa / Sáng màn hình">
+                  <i class="fa-solid fa-sun"></i>
+                </button>
+              </div>
+
+              <!-- Stream Speed Selector & Refresh -->
+              <div class="flex items-center space-x-1.5">
+                <select v-model="streamSpeed" class="bg-slate-900 border border-slate-700 text-emerald-400 text-[11px] px-2 py-1 rounded focus:outline-none font-mono">
+                  <option v-for="opt in streamSpeedOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </select>
+                <button @click="takeScreenshot(false)" :disabled="screenLoading" class="p-1.5 bg-emerald-700/60 hover:bg-emerald-600 text-white rounded transition text-xs" title="Chụp lại ngay">
+                  <i class="fa-solid fa-rotate" :class="{'fa-spin': screenLoading}"></i>
+                </button>
+                <button @click="downloadScreenshot" class="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition text-xs" title="Tải ảnh PNG về máy">
+                  <i class="fa-solid fa-download"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Large Interactive Vysor Screen Canvas with Click, Drag/Swipe, Wheel & Direct Typing -->
+            <div 
+              tabindex="0"
+              @keydown="onScreenKeyDown"
+              class="bg-black rounded-xl border border-slate-800 flex items-center justify-center min-h-[350px] max-h-[460px] overflow-hidden relative group outline-none focus:ring-2 focus:ring-emerald-500/50"
+              title="Vysor Screen: Nhấp chuột = Chạm, Kéo chuột = Vuốt, Cuộn chuột = Lướt danh sách, Chuột phải = Back, Phím máy tính = Nhập trực tiếp"
+            >
+              <!-- Live Image -->
+              <img 
+                v-if="screenshotUrl" 
+                ref="liveScreenImg"
+                :src="screenshotUrl" 
+                @mousedown="onScreenMouseDown"
+                @mouseup="onScreenMouseUp"
+                @wheel="onScreenWheel"
+                @contextmenu.prevent="onScreenMouseDown($event)"
+                class="max-h-[450px] w-full object-contain cursor-crosshair shadow-2xl select-none"
+                draggable="false"
+              >
+              <div v-else class="text-center text-slate-500 py-20">
+                <i class="fa-solid fa-display text-4xl mb-2 block animate-pulse text-emerald-500/50"></i>
+                <span class="text-xs font-mono">Đang kết nối Live Stream...</span>
+              </div>
+
+              <!-- Screen Wakeup Helper Button if Screen is sleeping/black -->
+              <button 
+                @click="sendKey('KEYCODE_WAKEUP'); triggerQuickRefresh();"
+                class="absolute top-2 right-2 bg-amber-500/90 hover:bg-amber-400 text-slate-950 font-bold px-2 py-1 rounded text-[11px] shadow-lg flex items-center space-x-1 opacity-80 hover:opacity-100 transition"
+                title="Bấm để bật sáng màn hình nếu đang bị tắt/ngủ"
+              >
+                <i class="fa-solid fa-sun"></i>
+                <span>Bật Sáng Màn</span>
+              </button>
+
+              <!-- Keyboard Active Indicator Badge -->
+              <div class="absolute bottom-2 left-2 bg-slate-900/85 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-emerald-400 border border-emerald-500/30 flex items-center space-x-1 opacity-70 group-hover:opacity-100 transition">
+                <i class="fa-solid fa-keyboard"></i>
+                <span>Gõ phím & Vuốt chuột như Vysor</span>
+              </div>
+            </div>
+
+            <!-- Vysor Integrated Remote Controls (Directly Under Screen) -->
+            <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1">
+              
+              <!-- D-Pad & Navigation Keys (5 cols) -->
+              <div class="sm:col-span-5 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 flex flex-col justify-between">
+                <div class="flex items-center justify-between text-[11px] text-slate-400 font-bold uppercase tracking-wider mb-1">
+                  <span>Phím Ảo (Remote)</span>
+                  <i class="fa-solid fa-gamepad text-slate-500"></i>
+                </div>
+
+                <!-- D-Pad Center -->
+                <div class="flex flex-col items-center justify-center my-1 space-y-0.5">
+                  <button @click="sendKey('KEYCODE_DPAD_UP'); triggerQuickRefresh();" class="w-9 h-7 bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-slate-200 rounded-t border border-slate-700 shadow flex items-center justify-center">
+                    <i class="fa-solid fa-chevron-up text-xs"></i>
+                  </button>
+                  <div class="flex items-center space-x-0.5">
+                    <button @click="sendKey('KEYCODE_DPAD_LEFT'); triggerQuickRefresh();" class="w-7 h-9 bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-slate-200 rounded-l border border-slate-700 shadow flex items-center justify-center">
+                      <i class="fa-solid fa-chevron-left text-xs"></i>
+                    </button>
+                    <button @click="sendKey('KEYCODE_DPAD_CENTER'); triggerQuickRefresh();" class="w-9 h-9 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded shadow font-bold text-xs">
+                      OK
+                    </button>
+                    <button @click="sendKey('KEYCODE_DPAD_RIGHT'); triggerQuickRefresh();" class="w-7 h-9 bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-slate-200 rounded-r border border-slate-700 shadow flex items-center justify-center">
+                      <i class="fa-solid fa-chevron-right text-xs"></i>
+                    </button>
+                  </div>
+                  <button @click="sendKey('KEYCODE_DPAD_DOWN'); triggerQuickRefresh();" class="w-9 h-7 bg-slate-800 hover:bg-slate-700 active:bg-emerald-600 text-slate-200 rounded-b border border-slate-700 shadow flex items-center justify-center">
+                    <i class="fa-solid fa-chevron-down text-xs"></i>
+                  </button>
+                </div>
+
+                <!-- Volume & Android Keys Row -->
+                <div class="grid grid-cols-4 gap-1 text-[10px] pt-1.5 border-t border-slate-850">
+                  <button @click="sendKey('KEYCODE_VOLUME_DOWN'); triggerQuickRefresh();" class="bg-slate-800 hover:bg-slate-700 py-1 rounded text-center" title="Giảm âm lượng">
+                    <span>Vol-</span>
+                  </button>
+                  <button @click="sendKey('KEYCODE_VOLUME_UP'); triggerQuickRefresh();" class="bg-slate-800 hover:bg-slate-700 py-1 rounded text-center" title="Tăng âm lượng">
+                    <span>Vol+</span>
+                  </button>
+                  <button @click="sendKey('KEYCODE_SETTINGS'); triggerQuickRefresh();" class="bg-slate-800 hover:bg-slate-700 py-1 rounded text-center text-teal-400" title="Cài đặt Android">
+                    <span>Cài đặt</span>
+                  </button>
+                  <button @click="sendKey('ACTION_WIFI'); triggerQuickRefresh();" class="bg-slate-800 hover:bg-slate-700 py-1 rounded text-center text-blue-400" title="Cài đặt Wi-Fi">
+                    <span>Wi-Fi</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Text Input & Extra Power Keys (7 cols) -->
+              <div class="sm:col-span-7 flex flex-col justify-between space-y-2">
+                <!-- Text Sender -->
+                <div class="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 space-y-1.5">
+                  <div class="flex items-center justify-between text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+                    <span>Gửi Văn Bản Sang Thiết Bị</span>
+                    <i class="fa-solid fa-keyboard text-slate-500"></i>
+                  </div>
+                  <div class="flex space-x-1.5">
+                    <input 
+                      v-model="inputText" 
+                      @keyup.enter="sendInputText"
+                      type="text" 
+                      placeholder="Nhập URL, tài khoản, mật khẩu..." 
+                      class="flex-1 bg-slate-900 border border-slate-700 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg focus:outline-none focus:border-emerald-500"
+                    >
+                    <button @click="sendInputText" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded-lg font-semibold transition">
+                      Gửi
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Extra Fast Action Buttons -->
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                  <button @click="sendKey('KEYCODE_APP_SWITCH'); triggerQuickRefresh();" class="bg-slate-950/60 hover:bg-slate-800 border border-slate-800 p-2 rounded-xl flex items-center justify-center space-x-1.5 text-slate-300 transition">
+                    <i class="fa-solid fa-window-restore text-purple-400"></i>
+                    <span class="text-xs font-semibold">Đa nhiệm</span>
+                  </button>
+                  <button @click="sendKey('KEYCODE_POWER'); triggerQuickRefresh();" class="bg-slate-950/60 hover:bg-slate-800 border border-slate-800 p-2 rounded-xl flex items-center justify-center space-x-1.5 text-slate-300 transition">
+                    <i class="fa-solid fa-power-off text-red-400"></i>
+                    <span class="text-xs font-semibold">Bật/Tắt Màn</span>
+                  </button>
+                </div>
+
+                <!-- Vysor Gesture Quick Hint -->
+                <div class="grid grid-cols-4 gap-1 text-[9px] text-slate-400 text-center bg-slate-950/40 p-1.5 rounded-lg border border-slate-850 font-mono">
+                  <div>🖱️ <b>Kéo:</b> Vuốt</div>
+                  <div>🔄 <b>Cuộn:</b> Lướt</div>
+                  <div>⌨️ <b>Gõ:</b> Text</div>
+                  <div>🔙 <b>Phải:</b> Back</div>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="bg-slate-900/90 px-6 py-3 border-t border-slate-700/80 flex items-center justify-between text-xs">
+          <div class="text-slate-400">
+            Trạng thái kết nối: <span class="font-bold text-emerald-400">Đã kết nối qua TCP 5555</span>
+          </div>
+          <button @click="closeControlModal" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 rounded-lg font-semibold transition">
+            Đóng
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- EDIT DEVICE MODAL -->
+    <div v-if="showEditDeviceModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-700">
+          <div class="flex items-center space-x-2">
+            <div class="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center text-sm">
+              <i class="fa-solid fa-pen-to-square"></i>
+            </div>
+            <div>
+              <h3 class="font-bold text-slate-100 text-sm">Chỉnh Sửa Thông Tin Thiết Bị</h3>
+              <p class="text-[11px] text-slate-400">Hỗ trợ sửa thông tin, đổi IP khi tháo sửa hoặc thay box mới</p>
+            </div>
+          </div>
+          <button @click="showEditDeviceModal = false" class="text-slate-400 hover:text-slate-200">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <form @submit.prevent="saveEditDevice" class="space-y-3 text-xs">
+          <div class="grid grid-cols-2 gap-3">
+            <div class="col-span-2">
+              <label class="block text-slate-300 font-medium mb-1">Tên thiết bị / Vị trí</label>
+              <input v-model="editForm.name" type="text" required class="w-full bg-slate-900 border border-slate-700 text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+            </div>
+
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Mã kích hoạt (Active Code)</label>
+              <input v-model="editForm.activeCode" type="text" placeholder="Ví dụ: 867725" class="w-full bg-slate-900 border border-slate-700 font-mono text-amber-400 font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500">
+            </div>
+
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Địa chỉ IP (LAN)</label>
+              <input v-model="editForm.ip" type="text" required placeholder="172.18.x.x" class="w-full bg-slate-900 border border-slate-700 font-mono text-emerald-300 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+            </div>
+
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Phòng ban / Nhóm</label>
+              <input v-model="editForm.group" type="text" class="w-full bg-slate-900 border border-slate-700 text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+            </div>
+
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Mã MAC / DeviceId</label>
+              <input v-model="editForm.mac" type="text" class="w-full bg-slate-900 border border-slate-700 font-mono text-slate-300 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+            </div>
+
+            <div class="col-span-2">
+              <label class="block text-slate-300 font-medium mb-1">Model / Ghi chú sửa chữa</label>
+              <input v-model="editForm.model" type="text" placeholder="Ví dụ: AR BOX G1 (Đang tháo sửa chữa / Đã thay box mới)" class="w-full bg-slate-900 border border-slate-700 text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+            </div>
+          </div>
+
+          <div class="pt-3 flex justify-between items-center border-t border-slate-700">
+            <button type="button" @click="deleteDevice(editForm)" class="text-red-400 hover:text-red-300 font-semibold text-xs flex items-center space-x-1">
+              <i class="fa-solid fa-trash"></i>
+              <span>Xóa thiết bị này</span>
+            </button>
+            <div class="flex space-x-2">
+              <button type="button" @click="showEditDeviceModal = false" class="bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg font-medium">Hủy</button>
+              <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white font-semibold px-4 py-2 rounded-lg transition">Lưu Thay Đổi</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ADD CUSTOM DEVICE MODAL -->
+    <div v-if="showAddDeviceModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-700">
+          <h3 class="font-bold text-slate-100 text-sm">Thêm Thiết Bị Mới</h3>
+          <button @click="showAddDeviceModal = false" class="text-slate-400 hover:text-slate-200">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <form @submit.prevent="saveNewDevice" class="space-y-3 text-xs">
+          <div>
+            <label class="block text-slate-300 font-medium mb-1">Tên thiết bị / Vị trí</label>
+            <input v-model="newDevice.name" type="text" required placeholder="Ví dụ: PTM - T 1 - SANH CHINH - 02" class="w-full bg-slate-900 border border-slate-700 text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Địa chỉ IP</label>
+              <input v-model="newDevice.ip" type="text" required placeholder="172.18.x.x" class="w-full bg-slate-900 border border-slate-700 font-mono text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+            </div>
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Mã kích hoạt</label>
+              <input v-model="newDevice.activeCode" type="text" placeholder="Ví dụ: 867725" class="w-full bg-slate-900 border border-slate-700 font-mono text-amber-400 px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500">
+            </div>
+          </div>
+          <div>
+            <label class="block text-slate-300 font-medium mb-1">Phòng ban / Vị trí</label>
+            <input v-model="newDevice.group" type="text" placeholder="Ví dụ: Khoa Khám Bệnh - Tầng 2" class="w-full bg-slate-900 border border-slate-700 text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label class="block text-slate-300 font-medium mb-1">Mã MAC / DeviceId (Tùy chọn)</label>
+            <input v-model="newDevice.mac" type="text" placeholder="Ví dụ: 544b57c1d25dd0c9" class="w-full bg-slate-900 border border-slate-700 font-mono text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+          </div>
+
+          <div class="pt-2 flex justify-end space-x-2">
+            <button type="button" @click="showAddDeviceModal = false" class="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-2 rounded-lg font-medium">Hủy</button>
+            <button type="submit" class="bg-teal-600 hover:bg-teal-500 text-white font-semibold px-4 py-2 rounded-lg transition">Lưu Thiết Bị</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- COMPREHENSIVE SYNC & CRAWL MODAL -->
+    <div v-if="showCloudSyncModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col">
+        <div class="bg-slate-900/90 px-6 py-4 border-b border-slate-700 flex items-center justify-between">
+          <div class="flex items-center space-x-2.5">
+            <div class="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-base">
+              <i class="fa-solid fa-cloud-arrow-down"></i>
+            </div>
+            <div>
+              <h3 class="font-bold text-slate-100 text-sm">Cào & Đồng Bộ Danh Sách Thiết Bị</h3>
+              <p class="text-[11px] text-slate-400">Tự động lấy toàn bộ thiết bị và mã kích hoạt từ Cloud</p>
+            </div>
+          </div>
+          <button @click="showCloudSyncModal = false" class="text-slate-400 hover:text-slate-200">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="bg-slate-900/50 px-6 border-b border-slate-700 flex space-x-4 text-xs font-semibold">
+          <button 
+            @click="syncMethod = 'login'" 
+            class="py-3 border-b-2 transition"
+            :class="syncMethod === 'login' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'"
+          >
+            <i class="fa-solid fa-user-lock mr-1.5"></i> Đăng nhập Cloud (Tự động)
+          </button>
+          <button 
+            @click="syncMethod = 'file_json'" 
+            class="py-3 border-b-2 transition"
+            :class="syncMethod === 'file_json' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'"
+          >
+            <i class="fa-solid fa-file-arrow-up mr-1.5"></i> Dán Token / Dữ Liệu
+          </button>
+          <button 
+            @click="syncMethod = 'lan_scan'" 
+            class="py-3 border-b-2 transition"
+            :class="syncMethod === 'lan_scan' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'"
+          >
+            <i class="fa-solid fa-network-wired mr-1.5"></i> Quét Tự Động Mạng LAN
+          </button>
+        </div>
+
+        <div class="p-6 space-y-4 text-xs">
+          <div v-if="syncMethod === 'login'" class="space-y-3">
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Tài khoản Smart Display</label>
+              <input v-model="cloudAuth.username" type="text" placeholder="Nhập username" class="w-full bg-slate-900 border border-slate-700 text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+            </div>
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Mật khẩu</label>
+              <input v-model="cloudAuth.password" type="password" placeholder="Nhập password" class="w-full bg-slate-900 border border-slate-700 text-slate-100 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+            </div>
+
+            <div class="flex justify-end space-x-2 pt-2">
+              <button type="button" @click="showCloudSyncModal = false" class="bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg font-medium">Hủy</button>
+              <button @click="loginAndSyncCloud" :disabled="syncingCloud || !cloudAuth.username || !cloudAuth.password" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5">
+                <i class="fa-solid fa-rotate" :class="{'fa-spin': syncingCloud}"></i>
+                <span>{{ syncingCloud ? 'Đang cào toàn bộ 710+ thiết bị...' : 'Đăng nhập & Cào Dữ Liệu' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="syncMethod === 'file_json'" class="space-y-3">
+            <div>
+              <label class="block text-slate-400 font-medium mb-1">Dán nội dung JSON response hoặc mã Token:</label>
+              <textarea 
+                v-model="directTokenInput" 
+                rows="3" 
+                placeholder="Dán mã Token hoặc JSON vào đây..." 
+                class="w-full bg-slate-900 border border-slate-700 text-slate-100 font-mono text-[11px] p-2.5 rounded-lg focus:outline-none focus:border-emerald-500"
+              ></textarea>
+            </div>
+
+            <div class="flex justify-end space-x-2 pt-2">
+              <button type="button" @click="showCloudSyncModal = false" class="bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg font-medium">Đóng</button>
+              <button @click="syncWithDirectToken" :disabled="!directTokenInput || syncingCloud" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5">
+                <i class="fa-solid fa-cloud-arrow-down" :class="{'fa-spin': syncingCloud}"></i>
+                <span>{{ syncingCloud ? 'Đang nạp dữ liệu...' : 'Cào Dữ Liệu' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="syncMethod === 'lan_scan'" class="space-y-3">
+            <div class="grid grid-cols-3 gap-2">
+              <div class="col-span-2">
+                <label class="block text-slate-300 font-medium mb-1">Dải mạng (Subnet Prefix)</label>
+                <input v-model="scanSubnetPrefix" type="text" placeholder="172.18.15 hoặc 172.18.14" class="w-full bg-slate-900 border border-slate-700 font-mono text-emerald-400 px-3 py-2 rounded-lg focus:outline-none focus:border-emerald-500">
+              </div>
+              <div>
+                <label class="block text-slate-300 font-medium mb-1">Cổng ADB</label>
+                <input v-model="scanPort" type="number" class="w-full bg-slate-900 border border-slate-700 font-mono text-slate-300 px-3 py-2 rounded-lg focus:outline-none">
+              </div>
+            </div>
+
+            <div class="flex items-center space-x-2 text-[11px]">
+              <span class="text-slate-400">Dải gợi ý:</span>
+              <button @click="scanSubnetPrefix = '172.18.15'" class="bg-slate-900 hover:bg-slate-700 px-2 py-0.5 rounded border border-slate-700 font-mono text-emerald-400">172.18.15.x</button>
+              <button @click="scanSubnetPrefix = '172.18.14'" class="bg-slate-900 hover:bg-slate-700 px-2 py-0.5 rounded border border-slate-700 font-mono text-emerald-400">172.18.14.x</button>
+              <button @click="scanSubnetPrefix = '172.18.12'" class="bg-slate-900 hover:bg-slate-700 px-2 py-0.5 rounded border border-slate-700 font-mono text-emerald-400">172.18.12.x</button>
+            </div>
+
+            <div class="flex justify-end space-x-2 pt-2">
+              <button type="button" @click="showCloudSyncModal = false" class="bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg font-medium">Hủy</button>
+              <button @click="runSubnetScan" :disabled="scanningSubnet" class="bg-teal-600 hover:bg-teal-500 text-white font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5">
+                <i class="fa-solid fa-radar" :class="{'fa-spin': scanningSubnet}"></i>
+                <span>{{ scanningSubnet ? 'Đang quét...' : 'Bắt Đầu Quét Mạng' }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- BATCH INSTALL MODAL -->
+    <div v-if="showBatchInstallModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-700">
+          <h3 class="font-bold text-slate-100 text-sm">Cài Đặt APK Hàng Loạt ({{ selectedDeviceIds.length }} Thiết Bị)</h3>
+          <button @click="showBatchInstallModal = false" class="text-slate-400 hover:text-slate-200">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="space-y-3 text-xs">
+          <p class="text-slate-300">Chọn ứng dụng cần cài đặt đồng loạt:</p>
+          <div class="space-y-2 max-h-60 overflow-y-auto">
+            <div 
+              v-for="apk in apks" 
+              :key="apk.id"
+              @click="selectedBatchApkId = apk.id"
+              class="p-3 rounded-lg border cursor-pointer transition flex items-center justify-between"
+              :class="selectedBatchApkId === apk.id ? 'bg-emerald-950/40 border-emerald-500 text-emerald-300' : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'"
+            >
+              <div>
+                <div class="font-bold">{{ apk.name }}</div>
+                <div class="text-[11px] text-slate-400 font-mono">{{ apk.fileName }}</div>
+              </div>
+              <i v-if="selectedBatchApkId === apk.id" class="fa-solid fa-circle-check text-emerald-400 text-base"></i>
+            </div>
+          </div>
+
+          <div class="pt-3 flex justify-end space-x-2">
+            <button @click="showBatchInstallModal = false" class="bg-slate-700 text-slate-300 px-3 py-2 rounded-lg font-medium">Hủy</button>
+            <button @click="executeBatchInstall" :disabled="!selectedBatchApkId || batchInstalling" class="bg-purple-600 hover:bg-purple-500 text-white font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5">
+              <i class="fa-solid fa-download" :class="{'fa-spin': batchInstalling}"></i>
+              <span>{{ batchInstalling ? 'Đang cài đặt...' : 'Bắt đầu cài đặt hàng loạt' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOAST NOTIFICATIONS -->
+    <div class="fixed bottom-5 right-5 z-50 space-y-2 max-w-sm pointer-events-none">
+      <div 
+        v-for="toast in toasts" 
+        :key="toast.id" 
+        class="pointer-events-auto p-3.5 rounded-xl shadow-xl flex items-center space-x-3 text-xs font-medium text-white transition-all transform duration-300 animate-slideUp"
+        :class="toast.type === 'error' ? 'bg-red-600' : (toast.type === 'success' ? 'bg-emerald-600' : 'bg-slate-800 border border-slate-700')"
+      >
+        <i :class="toast.type === 'error' ? 'fa-solid fa-circle-exclamation' : (toast.type === 'success' ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-info')"></i>
+        <div class="flex-1">{{ toast.message }}</div>
+        <button @click="removeToast(toast.id)" class="text-slate-200 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- App JS -->
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "smartdisplay-adb-manager",
+  "version": "1.0.0",
+  "description": "Smart Display Device Management & ADB Controller",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "build-exe": "pkg . --output dist/SmartDisplay_ADB_Manager.exe --targets node18-win-x64"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "ws": "^8.18.0"
+  },
+  "bin": "server/server.js",
+  "pkg": {
+    "scripts": "server/**/*.js",
+    "assets": [
+      "public/**/*",
+      "data/**/*"
+    ],
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "dist"
+  }
+}
