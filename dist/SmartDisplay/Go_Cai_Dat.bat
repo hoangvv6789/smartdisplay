@@ -1,25 +1,23 @@
 @echo off
 chcp 65001 > nul
-title Gỡ cài đặt SmartDisplay
+title Go cai dat SmartDisplay
 color 0C
 echo.
-echo   GỠ CÀI ĐẶT SMARTDISPLAY...
+echo   GO CAI DAT SMARTDISPLAY...
 echo.
 
-:: Tắt app trước
 taskkill /F /IM SmartDisplay_ADB_Manager.exe 2>nul
 taskkill /F /IM SmartDisplay.exe 2>nul
 
-:: Xóa khỏi Startup
 set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 if exist "%STARTUP_FOLDER%\SmartDisplay_AutoStart.vbs" (
     del /f "%STARTUP_FOLDER%\SmartDisplay_AutoStart.vbs"
-    echo   ✅ Đã xóa khỏi Startup
+    echo   [OK] Da xoa khoi Startup
 ) else (
-    echo   ℹ️  Không có trong Startup
+    echo   [i] Khong co trong Startup
 )
 
 echo.
-echo   ✅ Đã gỡ cài đặt! (Folder app vẫn giữ nguyên, xóa tay nếu muốn)
+echo   [OK] Da go cai dat! (Folder app van giu nguyen, xoa tay neu muon)
 echo.
 pause

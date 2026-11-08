@@ -1,26 +1,23 @@
 @echo off
 chcp 65001 > nul
-title SmartDisplay - Chạy nhanh
+title SmartDisplay - Chay nhanh
 cd /d "%~dp0"
 
-:: Kiểm tra Node.js
 node --version >nul 2>&1
 if errorlevel 1 (
-    echo   ❌ Cần cài Node.js: https://nodejs.org/
+    echo   [X] Can cai Node.js: https://nodejs.org/
     pause
     exit /b 1
 )
 
-:: Cài deps nếu chưa có
 if not exist "node_modules" (
-    echo   Đang cài thư viện...
+    echo   Dang cai thu vien...
     call npm install --production
 )
 
-:: Chạy ẩn (không hiện cửa sổ terminal)
 start "" wscript.exe "%~dp0Chay_An_SmartDisplay.vbs"
 
-echo   ✅ SmartDisplay đang chạy!
-echo   🌐 Mở: http://localhost:8686
+echo   [OK] SmartDisplay dang chay!
+echo   Mo: http://localhost:8686
 timeout /t 2 >nul
 start "" "http://localhost:8686"
