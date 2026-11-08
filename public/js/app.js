@@ -118,6 +118,7 @@ createApp({
       dragStartY: 0,
       dragStartTime: 0,
       keyboardCaptureEnabled: true,
+      streamActive: false,
 
       // Tab 3 APK
       installedPackages: [],
@@ -230,9 +231,8 @@ createApp({
 
   watch: {
     searchQuery() { this.currentPage = 1; },
-    statusFilter() { this.currentPage = 1; },
-    groupFilter() { this.currentPage = 1; },
-    roomFilter() { this.currentPage = 1; },
+    selectedStatus() { this.currentPage = 1; },
+    selectedGroup() { this.currentPage = 1; },
     pageSize() { this.currentPage = 1; },
     autoRefreshScreen() {
       this.restartStreamInterval();
@@ -757,7 +757,7 @@ createApp({
       this.toast(`Đã cài đặt thành công cho ${okCount}/${this.selectedDeviceIds.length} thiết bị`, 'success');
     },
 
-    openControlModal(device) {
+    async openControlModal(device) {
       this.currentDevice = device;
       this.activeDeviceModal = true;
       this.activeModalTab = 'quick_fix';
@@ -769,7 +769,7 @@ createApp({
       this.autoRefreshScreen = true;
 
       if (!device.adbConnected) {
-        this.connectAdb(device);
+        await this.connectAdb(device);
       }
       this.fetchInstalledPackages();
       this.checkGooglePlayStatus();
@@ -912,7 +912,7 @@ createApp({
         const res = await fetch('/api/adb/install-opengapps', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target: this.currentDevice.ip, picoPath: folder, autoReset: true })
+          body: JSON.stringify({ target: this.currentDevice.ip, customPath: folder, autoReset: true })
         }).then(r => r.json());
 
         if (res.success) {

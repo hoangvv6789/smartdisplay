@@ -568,9 +568,9 @@ am start -n ${activityName || packageName}
 
   async sendText(target, text) {
     const targetArgs = this.getTargetArg(target);
+    // FIX: Chạy qua execDeviceShell (stdin) để tránh cmd.exe nuốt ký tự đặc biệt ; | & > < ^ %
     const escaped = text.replace(/\s/g, '%s').replace(/['"]/g, '');
-    const res = await this.execCommand([...targetArgs, 'shell', 'input', 'text', escaped]);
-    return res;
+    return await this.execDeviceShell(target, `input text '${escaped}'`);
   }
 
   async sendTap(target, x, y) {
@@ -1074,7 +1074,7 @@ am start -n ${activityName || packageName}
 
     // Lấy UID thực tế của app để chown chính xác — parse bằng JS, KHÔNG pipe sang awk
     const lsRes = await this.execSuScript(target, `ls -ld ${APP_DATA}`);
-    const lsLine = ((lsRes.stdout || '').split('\n').find(l => l.trim().startsWith('drw')) || '').trim();
+    const lsLine = ((lsRes.stdout || '').split('\n').find(l => l.trim().startsWith('d')) || '').trim();
     const appUid = lsLine ? (lsLine.split(/\s+/)[2] || '') : '';
     if (appUid && /^u\d+_/.test(appUid)) {
       await this.execSuScript(target, `chown ${appUid}:${appUid} ${AUTH_PATH}`);

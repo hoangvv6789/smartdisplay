@@ -7,7 +7,6 @@ function checkPort(host, port = 5555, timeout = 1000) {
 
     socket.setTimeout(timeout);
     socket.on('connect', () => {
-      status = true;
       socket.destroy();
       resolve({ host, port, open: true });
     });
@@ -26,7 +25,9 @@ function checkPort(host, port = 5555, timeout = 1000) {
 function pingHost(host, timeout = 1000) {
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32';
-    const cmd = isWin ? `ping -n 1 -w ${timeout} ${host}` : `ping -c 1 -W 1 ${host}`;
+    const winTimeout = Math.max(1, Math.ceil(timeout));
+    const linuxTimeout = Math.max(1, Math.ceil(timeout / 1000));
+    const cmd = isWin ? `ping -n 1 -w ${winTimeout} ${host}` : `ping -c 1 -W ${linuxTimeout} ${host}`;
     
     exec(cmd, { windowsHide: true, timeout: timeout + 500 }, (err, stdout) => {
       if (err) {
