@@ -1,0 +1,9 @@
+{
+  "apiDomain": "http://api-smart-display.hongngochospital.vn/",
+  "adbPath": "C:\\platform-tools\\adb.exe",
+  "defaultPort": 5555,
+  "autoRefreshInterval": 15000,
+  "smartDisplayPackage": "vn.adtcreative.hongngocdisplay",
+  "launcherWatchdogEnabled": true,
+  "launcherWatchdogIntervalHours": 4
+}

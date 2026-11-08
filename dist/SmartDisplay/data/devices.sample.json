@@ -1,0 +1,10 @@
+[
+  {
+    "id": 1,
+    "name": "Màn hình Mẫu Phòng 101",
+    "ip": "172.18.14.100",
+    "mac": "00:11:22:33:44:55",
+    "group": "Khoa Nội",
+    "status": "online"
+  }
+]
