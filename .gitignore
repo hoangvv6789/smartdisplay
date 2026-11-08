@@ -1,32 +1,8 @@
-# Dependencies
 node_modules/
-
-# Production build and binary executables
-dist/
-*.exe
-
-# Large APKs, firmware packages, and platform tools
-apks/
-apk_extracted/
-packages/
-platform-tools/
-
-# Sensitive data (Hospital internal IP & tokens)
-data/devices.json
-dist/data/
-
-# Temporary and test files
-scratch/
-test.js
-check_devices.js
-
-# Logs
+dist/*.tar.gz
+dist/*.exe
+dist/server-bundled.js
 *.log
 server_debug.log
-launcher.log
-
-# System & IDE files
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
+temp_auth_*.xml
+.git-credentials
