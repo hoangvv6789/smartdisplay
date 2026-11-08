@@ -65,14 +65,15 @@
             </span>
           </button>
 
+          <!-- Quick Watchdog Scan All Button -->
           <button 
-            @click="toggleWindowsAutostart" 
-            class="flex items-center space-x-1.5 text-xs font-semibold px-3 py-2 rounded-lg border transition shadow-sm"
-            :class="windowsAutostart ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'"
-            :title="windowsAutostart ? 'Phần mềm ĐANG TỰ ĐỘNG KHỞI ĐỘNG CÙNG WINDOWS. Bấm để tắt.' : 'Bấm để TỰ ĐỘNG KHỞI ĐỘNG PHẦN MỀM KHI BẬT MÁY TÍNH WINDOWS'"
+            @click="scanAllLaunchersNow" 
+            :disabled="watchdog.running || batchRestoringLauncher"
+            class="flex items-center space-x-1.5 text-xs font-semibold px-3 py-2 rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-emerald-300 hover:border-emerald-600 transition shadow-sm"
+            title="Bấm để kiểm tra và phục hồi Launcher ngay lập tức cho tất cả thiết bị"
           >
-            <i class="fa-solid fa-power-off text-xs" :class="windowsAutostart ? 'text-indigo-400 animate-pulse' : 'text-slate-500'"></i>
-            <span>{{ windowsAutostart ? 'Tự Chạy Cùng Win: BẬT' : 'Tự Chạy Cùng Win' }}</span>
+            <i class="fa-solid fa-arrows-rotate text-xs" :class="(watchdog.running || batchRestoringLauncher) ? 'animate-spin text-amber-400' : 'text-slate-400'"></i>
+            <span>{{ (watchdog.running || batchRestoringLauncher) ? 'Đang quét...' : 'Quét Toàn Bộ Ngay' }}</span>
           </button>
 
           <button @click="openCloudSyncModal" class="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg shadow transition">

@@ -790,13 +790,36 @@ am start -n ${activityName || packageName}
   }
 
   /**
+   * Trích xuất thông tin package và activity đang hiển thị trên foreground từ dumpsys window
+   */
+  parseFocusedPackage(windowDumpText) {
+    if (!windowDumpText) return { line: '', pkg: '', activity: '' };
+    const focusMatch = windowDumpText.match(/mCurrentFocus[^\r\n]+/i) || windowDumpText.match(/mFocusedApp[^\r\n]+/i);
+    if (!focusMatch) return { line: '', pkg: '', activity: '' };
+    const line = focusMatch[0].trim();
+
+    const cmpMatch = line.match(/u\d+\s+([a-zA-Z0-9_\.]+)\/([a-zA-Z0-9_\.\$]+)/) ||
+                     line.match(/([a-zA-Z0-9_\.]+)\/([a-zA-Z0-9_\.\$]+)/);
+    const pkg = cmpMatch ? cmpMatch[1] : '';
+    const activity = cmpMatch ? cmpMatch[2] : '';
+    return { line, pkg, activity };
+  }
+
+  /**
+   * Lấy nhanh focus hiện tại trên màn hình
+   */
+  async getCurrentFocusInfo(target) {
+    const targetWithPort = target.includes(':') ? target : `${target}:5555`;
+    const targetArgs = ['-s', targetWithPort];
+    const res = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 7000 });
+    const fullText = (res.stdout || '') + ' ' + (res.stderr || '');
+    return this.parseFocusedPackage(fullText);
+  }
+
+  /**
    * Kiểm tra xem màn hình đang chạy Launcher SmartDisplay hay bị văng ra ngoài,
    * hoặc có bị tắt màn hình (Asleep) hay bị lỗi trắng màn (Day ngoài khoảng) không.
    * Nếu phát hiện lỗi, tự động phục hồi và sửa lỗi ngay tại chỗ mà KHÔNG mất Mã KH!
-   *
-   * FIX: Mọi lệnh có ký tự đặc biệt (; | || 2>/dev/null) chuyển sang execDeviceShell —
-   * cmd.exe Windows nuốt các ký tự này nên bước phục hồi launcher cũ không bao giờ chạy.
-   * FIX: Bỏ hardcode .SplashActivity — máy thật chạy .MainActivity, dùng monkey tự resolve.
    */
   async checkAndRestoreLauncher(target, targetPackage = 'vn.adtcreative.hongngocdisplay', autoFixWhiteScreen = true, autoDisconnect = true) {
     const targetWithPort = target.includes(':') ? target : `${target}:5555`;
@@ -823,21 +846,18 @@ am start -n ${activityName || packageName}
       const powerText = (powerRes.stdout || '');
       const isAsleep = powerText.includes('mWakefulness=Asleep') || powerText.includes('Display Power: state=OFF');
       if (isAsleep) {
-        await this.execDeviceShell(target, 'input keyevent KEYCODE_WAKEUP\nwm dismiss-keyguard\n' + keepAwake, { timeout: 6000 });
+        await this.execDeviceShell(target, 'input keyevent KEYCODE_WAKEUP\nwm dismiss-keyguard\n' + keepAwake, { timeout: 5000 });
       } else {
-        await this.execDeviceShell(target, keepAwake, { timeout: 5000 });
+        await this.execDeviceShell(target, keepAwake, { timeout: 3000 });
       }
 
-      // 3. Lấy top window / activity đang hiển thị trên màn hình
-      const windowRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 10000 });
-      const fullText = (windowRes.stdout || '') + ' ' + (windowRes.stderr || '');
-
-      // Trích xuất dòng mCurrentFocus hoặc mFocusedApp
-      const focusMatch = fullText.match(/mCurrentFocus[^\r\n]+/i) || fullText.match(/mFocusedApp[^\r\n]+/i);
-      const focusLine = focusMatch ? focusMatch[0].trim() : '';
+      // 3. Lấy chính xác app đang hiển thị trên foreground
+      const focusInfo = await this.getCurrentFocusInfo(target);
+      const currentPkg = focusInfo.pkg;
+      const focusLine = focusInfo.line;
 
       // Kiểm tra xem màn hình hiện tại có ĐANG FOCUS vào SmartDisplay không
-      const isInSmartDisplay = focusLine.includes(targetPackage) || focusLine.includes('hongngocdisplay');
+      const isInSmartDisplay = currentPkg === targetPackage || currentPkg.includes('hongngocdisplay');
 
       // 4. Nếu ĐANG ở trong SmartDisplay: Kiểm tra lỗi TRẮNG MÀN HÌNH (Day ngoài khoảng)
       if (isInSmartDisplay) {
@@ -870,36 +890,47 @@ am start -n ${activityName || packageName}
       }
 
       // 5. Nếu bị OUT Launcher -> Phục hồi lại Launcher đa tầng
-      // Bước A: Nhấn nút Home (KEYCODE_HOME = 3). SmartDisplay là Launcher mặc định nên Home sẽ đưa về app ngay.
-      await this.execCommand([...targetArgs, 'shell', 'input', 'keyevent', '3'], { timeout: 3000 });
-      await new Promise(r => setTimeout(r, 1000));
-
-      // Kiểm tra xem đã về SmartDisplay chưa
-      let recheckRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 10000 });
-      let recheckText = (recheckRes.stdout || '');
-      let restored = recheckText.includes(`${targetPackage}/`) || recheckText.includes(targetPackage);
-
-      // Bước B: Nếu vẫn chưa về (ví dụ app đè lên như YouTube), tắt app đè và mở lại launcher
-      if (!restored) {
-        const curFocusMatch = recheckText.match(/mCurrentFocus[^\r\n]+/i) || recheckText.match(/mFocusedApp[^\r\n]+/i);
-        const curFocus = curFocusMatch ? curFocusMatch[0] : '';
-        const pkgMatch = curFocus.match(/u\d+\s+([a-zA-Z0-9_\.]+)\//);
-        const competingPkg = pkgMatch ? pkgMatch[1] : null;
-
-        if (competingPkg && !competingPkg.includes('android.systemui') && !competingPkg.includes(targetPackage) && !competingPkg.includes('hongngocdisplay')) {
-          await this.execCommand([...targetArgs, 'shell', `am force-stop ${competingPkg}`], { timeout: 3000 });
+      // BƯỚC 5.1: Xử lý ứng dụng chiếm quyền hoặc dialog crash chặn màn hình
+      if (currentPkg && !currentPkg.includes(targetPackage) && !currentPkg.includes('hongngocdisplay')) {
+        if (currentPkg === 'android' || currentPkg.includes('systemui')) {
+          // Dialog crash / ANR popup ("Ứng dụng đã dừng lại") -> nhấn BACK và ENTER để tắt
+          await this.execCommand([...targetArgs, 'shell', 'input', 'keyevent', '4'], { timeout: 2000 });
+          await this.execCommand([...targetArgs, 'shell', 'input', 'keyevent', '66'], { timeout: 2000 });
+        } else {
+          // Buộc dừng ứng dụng chiếm màn hình (YouTube, Chrome, Settings, Video Player...)
+          await this.execCommand([...targetArgs, 'shell', 'am', 'force-stop', currentPkg], { timeout: 3000 });
         }
+      }
 
-        // FIX: KHÔNG hardcode .SplashActivity (máy thật chạy .MainActivity) — để monkey tự resolve activity launcher
+      // BƯỚC 5.2: Cấu hình lại SmartDisplay là Home Launcher mặc định của Android
+      await this.execCommand([...targetArgs, 'shell', 'cmd', 'package', 'set-home-activity', `${targetPackage}/.SplashActivity`], { timeout: 3000 });
+
+      // BƯỚC 5.3: Kích hoạt đưa Launcher lên tiền cảnh (monkey + Intent HOME + Keycode HOME)
+      await this.execDeviceShell(target,
+        `monkey -p ${targetPackage} -c android.intent.category.LAUNCHER 1\n` +
+        `am start -a android.intent.action.MAIN -c android.intent.category.HOME\n` +
+        `input keyevent 3`,
+        { timeout: 7000 }
+      );
+      await new Promise(r => setTimeout(r, 1500));
+
+      // BƯỚC 5.4: Kiểm tra lại focus thực tế xem đã về SmartDisplay chưa
+      let recheckInfo = await this.getCurrentFocusInfo(target);
+      let restored = recheckInfo.pkg === targetPackage || recheckInfo.pkg.includes('hongngocdisplay');
+
+      // BƯỚC 5.5: Nếu vẫn chưa được (app bị treo process ngầm / ANR), khởi động lại process của SmartDisplay
+      if (!restored) {
+        await this.execCommand([...targetArgs, 'shell', 'am', 'force-stop', targetPackage], { timeout: 3000 });
+        await new Promise(r => setTimeout(r, 500));
         await this.execDeviceShell(target,
-          'am start -a android.intent.action.MAIN -c android.intent.category.HOME\n' +
-          `monkey -p ${targetPackage} -c android.intent.category.LAUNCHER 1`,
-          { timeout: 8000 });
+          `monkey -p ${targetPackage} -c android.intent.category.LAUNCHER 1\n` +
+          `input keyevent 3`,
+          { timeout: 7000 }
+        );
         await new Promise(r => setTimeout(r, 2000));
 
-        recheckRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 10000 });
-        recheckText = (recheckRes.stdout || '');
-        restored = recheckText.includes(`${targetPackage}/`) || recheckText.includes(targetPackage);
+        recheckInfo = await this.getCurrentFocusInfo(target);
+        restored = recheckInfo.pkg === targetPackage || recheckInfo.pkg.includes('hongngocdisplay');
       }
 
       // 6. Nếu vừa phục hồi vào lại app, kiểm tra xem có bị trắng màn không
@@ -912,6 +943,7 @@ am start -n ${activityName || packageName}
             target,
             status: fixRes.success ? 'fixed_white_screen' : 'restored',
             previousFocus: focusLine || 'Màn hình ngoài/Desktop',
+            currentFocus: recheckInfo.line,
             message: fixRes.success
               ? 'Đã phục hồi Launcher và tự động sửa luôn lỗi trắng màn hình (Giữ Mã KH)!'
               : 'Đã phục hồi Launcher.'
@@ -924,6 +956,7 @@ am start -n ${activityName || packageName}
         target,
         status: restored ? 'restored' : 'failed',
         previousFocus: focusLine || 'Màn hình ngoài/Desktop',
+        currentFocus: recheckInfo.line,
         message: restored
           ? `Đã tự động phục hồi đưa về Launcher ${targetPackage} thành công!`
           : `Phát hiện out Launcher (${focusLine || 'Desktop'}) nhưng chưa thể tự mở lại.`

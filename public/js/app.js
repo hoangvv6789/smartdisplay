@@ -51,7 +51,6 @@ createApp({
       openGAppsReady: false,
       openGAppsPath: '',
       uploadingZip: false,
-      windowsAutostart: false,
 
       // Edit Form state
       editForm: {
@@ -256,7 +255,6 @@ createApp({
   mounted() {
     this.initWebSocket();
     this.fetchAllData();
-    this.checkWindowsAutostart();
   },
 
   methods: {
@@ -979,30 +977,37 @@ createApp({
       }
     },
 
-    async checkWindowsAutostart() {
-      try {
-        const res = await fetch('/api/system/autostart').then(r => r.json());
-        this.windowsAutostart = res.enabled;
-      } catch (e) {}
-    },
+    async scanAllLaunchersNow() {
+      if (this.watchdog.running || this.batchRestoringLauncher) return;
+      if (!confirm('Bạn có muốn QUÉT VÀ TỰ ĐỘNG PHỤC HỒI LAUNCHER cho TOÀN BỘ danh sách thiết bị ngay bây giờ?\n\n- Tự động kéo mọi thiết bị bị văng app/youtube/desktop về lại SmartDisplay.\n- Tự động sửa lỗi trắng màn hình (bảo lưu Mã KH).\n- Tự động đánh thức màn hình đang ngủ.')) return;
 
-    async toggleWindowsAutostart() {
-      const targetState = !this.windowsAutostart;
+      this.batchRestoringLauncher = true;
+      this.toast('Đang bắt đầu quét & phục hồi toàn bộ thiết bị...', 'info');
       try {
-        const res = await fetch('/api/system/autostart', {
+        const res = await fetch('/api/watchdog/scan-now', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enable: targetState })
+          body: JSON.stringify({})
         }).then(r => r.json());
 
         if (res.success) {
-          this.windowsAutostart = res.enabled;
-          this.toast(res.message, 'success');
+          const parts = [];
+          if (res.restored > 0) parts.push(`Kéo về Launcher: ${res.restored}`);
+          if (res.fixedWhiteScreen > 0) parts.push(`Sửa trắng màn: ${res.fixedWhiteScreen}`);
+          if (res.ok > 0) parts.push(`Bình thường: ${res.ok}`);
+          if (res.offline > 0) parts.push(`Offline: ${res.offline}`);
+          this.toast(parts.join(' | ') || 'Đã quét xong toàn bộ thiết bị!', 'success');
         } else {
-          this.toast('Lỗi: ' + res.message, 'error');
+          this.toast('Lỗi quét: ' + (res.message || 'Không thành công'), 'error');
         }
       } catch (e) {
-        this.toast('Lỗi: ' + e.message, 'error');
+        this.toast('Lỗi kết nối quét: ' + e.message, 'error');
+      } finally {
+        this.batchRestoringLauncher = false;
+        // Cập nhật lại trạng thái watchdog
+        fetch('/api/watchdog/status').then(r => r.json()).then(st => {
+          if (st.success) this.watchdog = { ...this.watchdog, ...st };
+        }).catch(() => {});
       }
     },
 

@@ -515,32 +515,6 @@ router.post('/adb/set-autostart-app', async (req, res) => {
   res.json(result);
 });
 
-router.get('/system/autostart', (req, res) => {
-  exec('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "SmartDisplay_ADB_Manager"', { windowsHide: true }, (err, stdout) => {
-    res.json({ enabled: !err && stdout.includes('SmartDisplay_ADB_Manager') });
-  });
-});
-
-router.post('/system/autostart', (req, res) => {
-  const { enable } = req.body;
-  // FIX: trỏ đúng tên exe thực tế (build ra SmartDisplay_ADB_Manager.exe)
-  const exeName = fs.existsSync(path.join(ROOT_DIR, 'SmartDisplay_ADB_Manager.exe'))
-    ? 'SmartDisplay_ADB_Manager.exe'
-    : 'SmartDisplay.exe';
-  const exePath = path.join(ROOT_DIR, exeName);
-  if (enable) {
-    const cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "SmartDisplay_ADB_Manager" /t REG_SZ /d "\"${exePath}\"" /f`;
-    exec(cmd, { windowsHide: true }, (err) => {
-      res.json({ success: !err, enabled: true, message: err ? err.message : 'Đã bật tự động khởi động cùng Windows!' });
-    });
-  } else {
-    const cmd = `reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "SmartDisplay_ADB_Manager" /f`;
-    exec(cmd, { windowsHide: true }, (err) => {
-      res.json({ success: !err, enabled: false, message: err ? err.message : 'Đã tắt tự động khởi động cùng Windows!' });
-    });
-  }
-});
-
 router.post('/adb/install-opengapps', async (req, res) => {
   const { target, customPath, autoReset = true } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
