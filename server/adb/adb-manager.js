@@ -194,19 +194,12 @@ class AdbManager {
     });
   }
 
-  // FIX: Đọc giờ thiết bị dạng %Y%m%d%H%M%S -> Date (để so khớp với giờ máy chủ, không phụ thuộc locale)
+  // FIX: Đọc giờ thiết bị dạng epoch seconds (date +%s) → so sánh timezone-safe với Date.now()
   async readDeviceTime(target) {
-    const res = await this.execDeviceShell(target, 'date +%Y%m%d%H%M%S', { timeout: 5000 });
-    const digits = (res.stdout || '').replace(/\D/g, '');
-    if (digits.length !== 14) return null;
-    return new Date(
-      parseInt(digits.slice(0, 4), 10),
-      parseInt(digits.slice(4, 6), 10) - 1,
-      parseInt(digits.slice(6, 8), 10),
-      parseInt(digits.slice(8, 10), 10),
-      parseInt(digits.slice(10, 12), 10),
-      parseInt(digits.slice(12, 14), 10)
-    );
+    const res = await this.execDeviceShell(target, 'date +%s', { timeout: 5000 });
+    const epoch = parseInt((res.stdout || '').trim(), 10);
+    if (isNaN(epoch) || epoch <= 0) return null;
+    return new Date(epoch * 1000);
   }
 
   async factoryReset(target, mode = 'android8') {
@@ -714,9 +707,23 @@ am start -n ${activityName || packageName}
     }
 
     const d = new Date();
+    // FIX: Tính giờ theo TARGET TIMEZONE (không dùng giờ local server) để tránh lệch giờ khi server khác timezone
     const pad = (n) => n.toString().padStart(2, '0');
-    // Toybox/Busybox: MMDDhhmmYYYY.ss (THÁNG đứng trước) — dùng GIỜ LOCAL, không dùng toISOString()
-    const timeToybox = `${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${d.getFullYear()}.${pad(d.getSeconds())}`;
+    let timeToybox;
+    try {
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      });
+      const parts = fmt.formatToParts(d);
+      const get = (type) => parts.find(p => p.type === type)?.value || '00';
+      timeToybox = `${get('month')}${get('day')}${get('hour')}${get('minute')}${get('year')}.${get('second')}`;
+    } catch (_) {
+      // Fallback nếu Node build thiếu ICU: dùng giờ local server
+      timeToybox = `${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${d.getFullYear()}.${pad(d.getSeconds())}`;
+    }
 
     // Script chạy TRÊN THIẾT BỊ — tắt NTP trước để không bị ghi đè, set timezone, rồi set giờ
     const script = [
@@ -857,7 +864,9 @@ am start -n ${activityName || packageName}
       const focusLine = focusInfo.line;
 
       // Kiểm tra xem màn hình hiện tại có ĐANG FOCUS vào SmartDisplay không
-      const isInSmartDisplay = currentPkg === targetPackage || currentPkg.includes('hongngocdisplay');
+      // FIX: Dùng suffix từ targetPackage thay vì hardcode 'hongngocdisplay'
+      const pkgSuffix = targetPackage.split('.').pop();
+      const isInSmartDisplay = currentPkg === targetPackage || currentPkg.includes(pkgSuffix);
 
       // 4. Nếu ĐANG ở trong SmartDisplay: Kiểm tra lỗi TRẮNG MÀN HÌNH (Day ngoài khoảng)
       if (isInSmartDisplay) {
@@ -891,7 +900,7 @@ am start -n ${activityName || packageName}
 
       // 5. Nếu bị OUT Launcher -> Phục hồi lại Launcher đa tầng
       // BƯỚC 5.1: Xử lý ứng dụng chiếm quyền hoặc dialog crash chặn màn hình
-      if (currentPkg && !currentPkg.includes(targetPackage) && !currentPkg.includes('hongngocdisplay')) {
+      if (currentPkg && !currentPkg.includes(targetPackage) && !currentPkg.includes(pkgSuffix)) {
         if (currentPkg === 'android' || currentPkg.includes('systemui')) {
           // Dialog crash / ANR popup ("Ứng dụng đã dừng lại") -> nhấn BACK và ENTER để tắt
           await this.execCommand([...targetArgs, 'shell', 'input', 'keyevent', '4'], { timeout: 2000 });
@@ -916,7 +925,7 @@ am start -n ${activityName || packageName}
 
       // BƯỚC 5.4: Kiểm tra lại focus thực tế xem đã về SmartDisplay chưa
       let recheckInfo = await this.getCurrentFocusInfo(target);
-      let restored = recheckInfo.pkg === targetPackage || recheckInfo.pkg.includes('hongngocdisplay');
+      let restored = recheckInfo.pkg === targetPackage || recheckInfo.pkg.includes(pkgSuffix);
 
       // BƯỚC 5.5: Nếu vẫn chưa được (app bị treo process ngầm / ANR), khởi động lại process của SmartDisplay
       if (!restored) {
@@ -930,7 +939,7 @@ am start -n ${activityName || packageName}
         await new Promise(r => setTimeout(r, 2000));
 
         recheckInfo = await this.getCurrentFocusInfo(target);
-        restored = recheckInfo.pkg === targetPackage || recheckInfo.pkg.includes('hongngocdisplay');
+        restored = recheckInfo.pkg === targetPackage || recheckInfo.pkg.includes(pkgSuffix);
       }
 
       // 6. Nếu vừa phục hồi vào lại app, kiểm tra xem có bị trắng màn không
@@ -1058,8 +1067,17 @@ am start -n ${activityName || packageName}
     // Ghi file tạm local rồi push lên /sdcard
     const tmpLocal = path.join(ROOT_DIR, `temp_auth_${Date.now()}_${Math.random().toString(36).substr(2, 5)}.xml`);
     fs.writeFileSync(tmpLocal, cleanXml, 'utf8');
-    await this.execCommand([...targetArgs, 'push', `"${tmpLocal}"`, '/sdcard/Authorization.xml']);
+    const pushRes = await this.execCommand([...targetArgs, 'push', `"${tmpLocal}"`, '/sdcard/Authorization.xml']);
     try { fs.unlinkSync(tmpLocal); } catch (e) {}
+
+    // FIX: Kiểm tra push thành công trước khi cp — nếu push fail thì cp sẽ ghi đè file cũ bằng rỗng
+    if (!pushRes.success) {
+      return {
+        success: false,
+        target,
+        message: 'Không thể đẩy file Authorization.xml lên thiết bị: ' + (pushRes.stderr || pushRes.stdout || pushRes.error)
+      };
+    }
 
     // 6. Ghi đè vào data app và xoá database Realm lỗi, cache lỗi (chạy dưới quyền root)
     const applyScript = [

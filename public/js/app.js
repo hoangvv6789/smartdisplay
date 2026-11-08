@@ -532,7 +532,10 @@ createApp({
           await this.connectAdb(dev);
         }
       }
-      this.toast('Hoàn tất kết nối hàng loạt', 'success');
+      // FIX: Ngắt toàn bộ ADB sau batch connect
+      try { await fetch('/api/adb/disconnect-all', { method: 'POST' }); } catch (e) {}
+      this.toast('Hoàn tất kết nối hàng loạt (đã ngắt ADB)', 'success');
+      this.fetchAllData();
     },
 
     async batchReboot() {
@@ -593,6 +596,8 @@ createApp({
             failCount++;
           }
         }));
+        // FIX: Ngắt toàn bộ ADB sau mỗi chunk
+        try { await fetch('/api/adb/disconnect-all', { method: 'POST' }); } catch (e) {}
       }
 
       this.batchSyncingTime = false;
@@ -645,6 +650,8 @@ createApp({
             failCount++;
           }
         }));
+        // FIX: Ngắt toàn bộ ADB sau mỗi chunk
+        try { await fetch('/api/adb/disconnect-all', { method: 'POST' }); } catch (e) {}
       }
 
       this.batchFixingWhiteScreen = false;

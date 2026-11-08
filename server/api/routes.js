@@ -168,6 +168,8 @@ async function runWatchdogScan(customTargets = null) {
         });
       }
     }));
+    // FIX: Ngắt toàn bộ ADB sau mỗi chunk để tránh tích tụ connection
+    await adb.execCommand(['disconnect']);
   }
 
   watchdogResults = results;
@@ -656,6 +658,8 @@ router.post('/adb/fix-white-screen', async (req, res) => {
       results.push({ success: false, target: t, message: e.message });
     }
   }
+  // FIX: Ngắt toàn bộ ADB sau batch để tránh leak connection
+  await adb.execCommand(['disconnect']);
 
   res.json({
     success: true,
