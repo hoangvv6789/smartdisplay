@@ -1,5 +1,10 @@
 const { createApp } = Vue;
 
+// Package name mặc định — thống nhất với server
+const DEFAULT_LAUNCHER_PKG = 'vn.adtcreative.hongngocdisplay';
+// Timezone mặc định — múi giờ Hồ Chí Minh
+const DEFAULT_TIMEZONE = 'Asia/Ho_Chi_Minh';
+
 createApp({
   data() {
     return {
@@ -24,7 +29,7 @@ createApp({
         running: false,
         lastRun: null,
         nextRun: null,
-        targetPackage: 'vn.adtcreative.hongngocdisplay',
+        targetPackage: DEFAULT_LAUNCHER_PKG,
         lastSummary: null
       },
       watchdogUpdating: false,
@@ -96,8 +101,9 @@ createApp({
 
       // Tab 1 controls
       inputText: '',
-      customPackage: 'vn.adtcreative.hongngocdisplay',
+      customPackage: DEFAULT_LAUNCHER_PKG,
       picoFolderPath: 'C:\\pico-8.1',
+      defaultTimezone: DEFAULT_TIMEZONE,
 
       // Tab 2 Screenshot & Vysor Interactive Stream
       screenshotUrl: null,
@@ -336,6 +342,11 @@ createApp({
         }
         this.openGAppsReady = Boolean(sysRes.hasOpenGAppsPackage);
         this.openGAppsPath = sysRes.openGAppsPath || '';
+        // FIX: đồng bộ customPackage / watchdog targetPackage từ settings
+        if (sysRes.watchdog?.targetPackage) {
+          this.customPackage = sysRes.watchdog.targetPackage;
+          this.watchdog.targetPackage = sysRes.watchdog.targetPackage;
+        }
         this.devices = devRes.devices || [];
         this.apks = apkRes.apks || [];
       } catch (e) {
@@ -584,7 +595,7 @@ createApp({
             const res = await fetch('/api/adb/sync-time', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ target: dev.ip })
+              body: JSON.stringify({ target: dev.ip, timezone: this.defaultTimezone })
             }).then(r => r.json());
 
             if (res && res.success) {
@@ -778,8 +789,7 @@ createApp({
       if (!device.adbConnected) {
         await this.connectAdb(device);
       }
-      this.fetchInstalledPackages();
-      this.checkGooglePlayStatus();
+      // FIX: Không gọi fetchInstalledPackages/checkGooglePlayStatus ở đây — watcher activeModalTab sẽ gọi khi tab đổi
 
       // Wakeup screen & start screenshot stream
       this.sendKey('KEYCODE_WAKEUP');
@@ -937,7 +947,7 @@ createApp({
 
     async actionRestartApp() {
       if (!this.currentDevice?.ip) return;
-      const targetPkg = this.customPackage || 'vn.adtcreative.hongngocdisplay';
+      const targetPkg = this.customPackage || DEFAULT_LAUNCHER_PKG;
       this.actionLoading = true;
       try {
         const res = await fetch('/api/adb/restart-app', {
@@ -960,7 +970,7 @@ createApp({
 
     async actionSetAutoStartApp() {
       if (!this.currentDevice?.ip) return;
-      const targetPkg = this.customPackage || 'vn.adtcreative.hongngocdisplay';
+      const targetPkg = this.customPackage || DEFAULT_LAUNCHER_PKG;
       if (!confirm(`Cài đặt ứng dụng "${targetPkg}" làm ứng dụng mặc định & tự động khởi chạy khi máy/Box bật lên (Auto-Start / Kiosk Launcher)?`)) return;
 
       this.actionLoading = true;
@@ -1044,7 +1054,7 @@ createApp({
     },
 
     async actionClearData() {
-      const targetPkg = this.customPackage || 'vn.adtcreative.hongngocdisplay';
+      const targetPkg = this.customPackage || DEFAULT_LAUNCHER_PKG;
       if (!confirm(`Xóa toàn bộ Cache & Dữ liệu của ứng dụng "${targetPkg}"?`)) return;
       if (!this.currentDevice?.ip) return;
       this.actionLoading = true;
@@ -1090,7 +1100,7 @@ createApp({
         const res = await fetch('/api/adb/sync-time', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target: this.currentDevice.ip })
+          body: JSON.stringify({ target: this.currentDevice.ip, timezone: this.defaultTimezone })
         }).then(r => r.json());
 
         if (res.success) {
@@ -1427,7 +1437,7 @@ createApp({
     },
 
     handleScreenClick(e) {
-      this.onScreenMouseUp(e);
+      // FIX: Không gọi onScreenMouseUp ở đây — @mouseup đã xử lý rồi, gọi lại sẽ chạy trùng (double tap/swipe + screenshot thừa)
     },
 
     async installApkToDevice(apk) {

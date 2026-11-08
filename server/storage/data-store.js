@@ -88,7 +88,7 @@ class DataStore {
         {
           id: 'smart-display',
           name: 'Smart Display Client APK',
-          packageName: 'vn.hongngoc.smartdisplay',
+          packageName: 'vn.adtcreative.hongngocdisplay',
           fileName: 'smart-display.apk',
           description: 'Ứng dụng phát nội dung Smart Display Bệnh viện Hồng Ngọc',
           version: 'Mới nhất',

@@ -55,8 +55,9 @@ async function ensureConnected(target) {
 }
 
 // Helper: lấy package name launcher từ settings (không hardcode)
+const DEFAULT_LAUNCHER_PKG = 'vn.adtcreative.hongngocdisplay';
 function getLauncherPackage() {
-  return DataStore.getSettings().smartDisplayPackage || 'vn.adtcreative.hongngocdisplay';
+  return DataStore.getSettings().smartDisplayPackage || DEFAULT_LAUNCHER_PKG;
 }
 
 // --- System & ADB status ---

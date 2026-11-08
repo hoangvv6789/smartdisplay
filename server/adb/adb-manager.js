@@ -4,6 +4,9 @@ const fs = require('fs');
 const keycodes = require('./keycodes');
 const DataStore = require('../storage/data-store');
 
+// Package name mặc định của launcher SmartDisplay — thống nhất toàn bộ
+const DEFAULT_LAUNCHER_PKG = 'vn.adtcreative.hongngocdisplay';
+
 const isPkg = typeof process.pkg !== 'undefined';
 let ROOT_DIR = isPkg ? path.dirname(process.execPath) : path.join(__dirname, '../..');
 if (path.basename(ROOT_DIR).toLowerCase() === 'dist') {
@@ -507,7 +510,7 @@ am start -n ${activityName || packageName}
   }
 
   async restartApp(target, packageName) {
-    const pkg = packageName || DataStore.getSettings()?.smartDisplayPackage || 'vn.adtcreative.hongngocdisplay';
+    const pkg = packageName || DataStore.getSettings()?.smartDisplayPackage || DEFAULT_LAUNCHER_PKG;
     const targetArgs = this.getTargetArg(target);
     await this.execCommand([...targetArgs, 'shell', 'am', 'force-stop', pkg]);
     const launchRes = await this.execCommand([...targetArgs, 'shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1']);
@@ -518,7 +521,7 @@ am start -n ${activityName || packageName}
   }
 
   async clearAppData(target, packageName) {
-    const pkg = packageName || DataStore.getSettings()?.smartDisplayPackage || 'vn.adtcreative.hongngocdisplay';
+    const pkg = packageName || DataStore.getSettings()?.smartDisplayPackage || DEFAULT_LAUNCHER_PKG;
     const targetArgs = this.getTargetArg(target);
     const res = await this.execCommand([...targetArgs, 'shell', 'pm', 'clear', pkg]);
     const success = res.stdout.toLowerCase().includes('success');
@@ -828,7 +831,8 @@ am start -n ${activityName || packageName}
    * hoặc có bị tắt màn hình (Asleep) hay bị lỗi trắng màn (Day ngoài khoảng) không.
    * Nếu phát hiện lỗi, tự động phục hồi và sửa lỗi ngay tại chỗ mà KHÔNG mất Mã KH!
    */
-  async checkAndRestoreLauncher(target, targetPackage = 'vn.adtcreative.hongngocdisplay', autoFixWhiteScreen = true, autoDisconnect = true) {
+  async checkAndRestoreLauncher(target, targetPackage = null, autoFixWhiteScreen = true, autoDisconnect = true) {
+    if (!targetPackage) targetPackage = DataStore.getSettings()?.smartDisplayPackage || DEFAULT_LAUNCHER_PKG;
     const targetWithPort = target.includes(':') ? target : `${target}:5555`;
     const targetArgs = ['-s', targetWithPort];
 
@@ -911,8 +915,13 @@ am start -n ${activityName || packageName}
         }
       }
 
-      // BƯỚC 5.2: Cấu hình lại SmartDisplay là Home Launcher mặc định của Android
-      await this.execCommand([...targetArgs, 'shell', 'cmd', 'package', 'set-home-activity', `${targetPackage}/.SplashActivity`], { timeout: 3000 });
+      // BƯỚC 5.2: Cấu hình lại SmartDisplay là Home Launcher mặc định — resolve activity thật thay vì hardcode .SplashActivity
+      try {
+        const resolveRes = await this.execCommand([...targetArgs, 'shell', `cmd package resolve-activity --brief ${targetPackage}`], { timeout: 3000 });
+        const compLine = (resolveRes.stdout || '').split('\n').find(l => l.includes('/') && l.includes(targetPackage));
+        const compName = compLine ? compLine.trim() : `${targetPackage}/.MainActivity`;
+        await this.execCommand([...targetArgs, 'shell', 'cmd', 'package', 'set-home-activity', compName], { timeout: 3000 });
+      } catch (_) {}
 
       // BƯỚC 5.3: Kích hoạt đưa Launcher lên tiền cảnh (monkey + Intent HOME + Keycode HOME)
       await this.execDeviceShell(target,
@@ -989,7 +998,8 @@ am start -n ${activityName || packageName}
     const targetWithPort = target.includes(':') ? target : `${target}:5555`;
     const targetArgs = ['-s', targetWithPort];
     const ip = target.includes(':') ? target.split(':')[0] : target;
-    const PKG = 'vn.adtcreative.hongngocdisplay';
+    // FIX: đọc package từ settings thay vì hardcode
+    const PKG = DataStore.getSettings()?.smartDisplayPackage || DEFAULT_LAUNCHER_PKG;
     const APP_DATA = `/data/data/${PKG}`;
     const AUTH_PATH = `${APP_DATA}/shared_prefs/Authorization.xml`;
 
