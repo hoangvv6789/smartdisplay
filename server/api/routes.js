@@ -43,6 +43,22 @@ const uploadZip = multer({
   limits: { fileSize: 500 * 1024 * 1024 }
 });
 
+// Helper: đảm bảo phiên ADB đã mở trước khi gửi lệnh shell.
+// Port 5555 mở KHÔNG có nghĩa là adb đã connect — thiếu bước này sẽ ra "device not found".
+async function ensureConnected(target) {
+  const t = String(target || '');
+  if (!t) return false;
+  if (/^\d+\.\d+\.\d+\.\d+/.test(t)) {
+    await adb.connect(t, 5555); // idempotent — "already connected" nếu đã mở sẵn
+  }
+  return true;
+}
+
+// Helper: lấy package name launcher từ settings (không hardcode)
+function getLauncherPackage() {
+  return DataStore.getSettings().smartDisplayPackage || 'vn.adtcreative.hongngocdisplay';
+}
+
 // --- System & ADB status ---
 router.get('/system/status', async (req, res) => {
   const adbVer = await adb.checkVersion();
@@ -85,7 +101,7 @@ function getWatchdogStatus() {
     running: watchdogRunning,
     lastRun: watchdogLastRun,
     nextRun: watchdogNextRun,
-    targetPackage: settings.smartDisplayPackage || 'vn.adtcreative.hongngocdisplay',
+    targetPackage: getLauncherPackage(),
     lastSummary: watchdogResults.length > 0 ? {
       total: watchdogResults.length,
       restored: watchdogResults.filter(r => r.status === 'restored').length,
@@ -102,14 +118,14 @@ async function runWatchdogScan(customTargets = null) {
   watchdogLastRun = new Date().toISOString();
 
   const settings = DataStore.getSettings();
-  const targetPackage = settings.smartDisplayPackage || 'vn.adtcreative.hongngocdisplay';
+  const targetPackage = getLauncherPackage();
   const autoFixWhiteScreen = settings.autoFixWhiteScreen !== false;
-  const devices = DataStore.getDevices();
 
   let targetList = [];
   if (customTargets && Array.isArray(customTargets) && customTargets.length > 0) {
     targetList = customTargets;
   } else {
+    const devices = DataStore.getDevices();
     targetList = devices.map(d => ({ ip: d.ip, name: d.name, room: d.room || d.group })).filter(d => Boolean(d.ip));
   }
 
@@ -250,7 +266,7 @@ router.post('/system-packages/upload-opengapps', uploadZip.single('packageZip'),
   const psCmd = `powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`;
   exec(psCmd, { windowsHide: true }, (err, stdout, stderr) => {
     try { fs.unlinkSync(zipPath); } catch (e) {}
-    
+
     if (err) {
       return res.status(500).json({ success: false, message: 'Lỗi giải nén ZIP: ' + (stderr || err.message) });
     }
@@ -290,14 +306,14 @@ router.get('/cloud/sync', async (req, res) => {
 router.post('/devices/scan-subnet', async (req, res) => {
   const { subnet, start = 1, end = 254, port = 5555 } = req.body;
   const prefix = (subnet || '172.18.15').replace(/\.\d+$/, '').replace(/\.+$/, '');
-  
+
   try {
-    const foundIps = await scanSubnet(prefix, parseInt(start), parseInt(end), parseInt(port));
+    const foundIps = await scanSubnet(prefix, parseInt(start, 10), parseInt(end, 10), parseInt(port, 10));
     const newDevices = [];
     for (const ip of foundIps) {
       await adb.connect(ip, port);
       const info = await adb.getDeviceInfo(ip);
-      
+
       const dev = {
         id: 'dev_' + ip.replace(/\./g, '_'),
         name: info.model && info.model !== 'Unknown' ? `Smart Display (${info.model})` : `Smart Display ${ip}`,
@@ -334,7 +350,7 @@ router.get('/devices', async (req, res) => {
   const enriched = devices.map(d => {
     const ip = (d.ip || '').trim();
     const isAdbConnected = Boolean(ip) && (
-      connectedIps.has(ip) || 
+      connectedIps.has(ip) ||
       connectedAdb.some(c => c.serial === ip || c.serial.startsWith(ip + ':') || (c.ip && c.ip === ip))
     );
     return {
@@ -470,6 +486,7 @@ router.post('/adb/disconnect-all', async (req, res) => {
 router.post('/adb/reboot', async (req, res) => {
   const { target, mode } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
+  await ensureConnected(target);
   const result = await adb.reboot(target, mode);
   res.json(result);
 });
@@ -477,7 +494,7 @@ router.post('/adb/reboot', async (req, res) => {
 router.post('/adb/factory-reset', async (req, res) => {
   const { target, mode = 'android8' } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  await adb.connect(target, 5555);
+  await ensureConnected(target);
   const result = await adb.factoryReset(target, mode);
   res.json(result);
 });
@@ -485,7 +502,7 @@ router.post('/adb/factory-reset', async (req, res) => {
 router.post('/adb/remove-lockscreen', async (req, res) => {
   const { target } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  await adb.connect(target, 5555);
+  await ensureConnected(target);
   const result = await adb.removeLockscreen(target);
   res.json(result);
 });
@@ -493,11 +510,10 @@ router.post('/adb/remove-lockscreen', async (req, res) => {
 router.post('/adb/set-autostart-app', async (req, res) => {
   const { target, packageName } = req.body;
   if (!target || !packageName) return res.status(400).json({ success: false, message: 'Thiếu target device hoặc packageName' });
-  await adb.connect(target, 5555);
+  await ensureConnected(target);
   const result = await adb.setAutoStartApp(target, packageName);
   res.json(result);
 });
-
 
 router.get('/system/autostart', (req, res) => {
   exec('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "SmartDisplay_ADB_Manager"', { windowsHide: true }, (err, stdout) => {
@@ -507,7 +523,11 @@ router.get('/system/autostart', (req, res) => {
 
 router.post('/system/autostart', (req, res) => {
   const { enable } = req.body;
-  const exePath = path.join(ROOT_DIR, 'SmartDisplay.exe');
+  // FIX: trỏ đúng tên exe thực tế (build ra SmartDisplay_ADB_Manager.exe)
+  const exeName = fs.existsSync(path.join(ROOT_DIR, 'SmartDisplay_ADB_Manager.exe'))
+    ? 'SmartDisplay_ADB_Manager.exe'
+    : 'SmartDisplay.exe';
+  const exePath = path.join(ROOT_DIR, exeName);
   if (enable) {
     const cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "SmartDisplay_ADB_Manager" /t REG_SZ /d "\"${exePath}\"" /f`;
     exec(cmd, { windowsHide: true }, (err) => {
@@ -524,7 +544,7 @@ router.post('/system/autostart', (req, res) => {
 router.post('/adb/install-opengapps', async (req, res) => {
   const { target, customPath, autoReset = true } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  await adb.connect(target, 5555);
+  await ensureConnected(target);
   const result = await adb.installOpenGApps(target, customPath, autoReset);
   res.json(result);
 });
@@ -532,7 +552,7 @@ router.post('/adb/install-opengapps', async (req, res) => {
 router.get('/adb/google-play-status', async (req, res) => {
   const { target } = req.query;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  await adb.connect(target, 5555);
+  await ensureConnected(target);
   const result = await adb.checkGooglePlayStatus(target);
   res.json(result);
 });
@@ -540,7 +560,7 @@ router.get('/adb/google-play-status', async (req, res) => {
 router.post('/adb/toggle-google-play', async (req, res) => {
   const { target, enable } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  await adb.connect(target, 5555);
+  await ensureConnected(target);
   const result = await adb.toggleGooglePlayServices(target, !!enable);
   res.json(result);
 });
@@ -548,7 +568,7 @@ router.post('/adb/toggle-google-play', async (req, res) => {
 router.post('/adb/clear-google-play-cache', async (req, res) => {
   const { target } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  await adb.connect(target, 5555);
+  await ensureConnected(target);
   const result = await adb.clearGooglePlayCache(target);
   res.json(result);
 });
@@ -556,7 +576,9 @@ router.post('/adb/clear-google-play-cache', async (req, res) => {
 router.post('/adb/restart-app', async (req, res) => {
   const { target, packageName } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  const pkg = packageName || 'vn.adtcreative.hongngocdisplay';
+  // FIX: đọc package từ settings thay vì hardcode
+  const pkg = packageName || getLauncherPackage();
+  await ensureConnected(target);
   const result = await adb.restartApp(target, pkg);
   res.json(result);
 });
@@ -564,7 +586,9 @@ router.post('/adb/restart-app', async (req, res) => {
 router.post('/adb/clear-data', async (req, res) => {
   const { target, packageName } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  const pkg = packageName || 'vn.adtcreative.hongngocdisplay';
+  // FIX: đọc package từ settings thay vì hardcode
+  const pkg = packageName || getLauncherPackage();
+  await ensureConnected(target);
   const result = await adb.clearAppData(target, pkg);
   res.json(result);
 });
@@ -572,6 +596,7 @@ router.post('/adb/clear-data', async (req, res) => {
 router.post('/adb/keyevent', async (req, res) => {
   const { target, key } = req.body;
   if (!target || !key) return res.status(400).json({ success: false, message: 'Thiếu target hoặc key' });
+  await ensureConnected(target);
   const result = await adb.sendKey(target, key);
   res.json(result);
 });
@@ -579,6 +604,7 @@ router.post('/adb/keyevent', async (req, res) => {
 router.post('/adb/input-text', async (req, res) => {
   const { target, text } = req.body;
   if (!target || !text) return res.status(400).json({ success: false, message: 'Thiếu target hoặc text' });
+  await ensureConnected(target);
   const result = await adb.sendText(target, text);
   res.json(result);
 });
@@ -588,6 +614,7 @@ router.post('/adb/swipe', async (req, res) => {
   if (!target || x1 === undefined || y1 === undefined || x2 === undefined || y2 === undefined) {
     return res.status(400).json({ success: false, message: 'Thiếu tọa độ x1, y1, x2, y2' });
   }
+  await ensureConnected(target);
   const result = await adb.sendSwipe(target, x1, y1, x2, y2, duration);
   res.json(result);
 });
@@ -595,6 +622,7 @@ router.post('/adb/swipe', async (req, res) => {
 router.post('/adb/tap', async (req, res) => {
   const { target, x, y } = req.body;
   if (!target || x === undefined || y === undefined) return res.status(400).json({ success: false, message: 'Thiếu tọa độ x, y' });
+  await ensureConnected(target);
   const result = await adb.sendTap(target, x, y);
   res.json(result);
 });
@@ -602,6 +630,7 @@ router.post('/adb/tap', async (req, res) => {
 router.get('/adb/screenshot', async (req, res) => {
   const { target } = req.query;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target' });
+  await ensureConnected(target);
   const result = await adb.takeScreenshot(target);
   if (result.success) {
     if (req.query.format === 'binary') {
@@ -616,15 +645,17 @@ router.get('/adb/screenshot', async (req, res) => {
 router.post('/adb/shell', async (req, res) => {
   const { target, command } = req.body;
   if (!target || !command) return res.status(400).json({ success: false, message: 'Thiếu target hoặc command' });
+  await ensureConnected(target);
   const result = await adb.shell(target, command);
   res.json(result);
 });
 
 
 router.post('/adb/sync-time', async (req, res) => {
-  const { target } = req.body;
+  const { target, timezone } = req.body;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target' });
-  const result = await adb.syncTime(target);
+  await ensureConnected(target);
+  const result = await adb.syncTime(target, timezone);
   res.json(result);
 });
 
@@ -635,6 +666,7 @@ router.post('/adb/fix-white-screen', async (req, res) => {
   }
 
   if (target) {
+    await ensureConnected(target);
     const result = await adb.fixWhiteScreenKeepCode(target);
     return res.json(result);
   }
@@ -643,6 +675,7 @@ router.post('/adb/fix-white-screen', async (req, res) => {
   const results = [];
   for (const t of targets) {
     try {
+      await ensureConnected(t);
       const r = await adb.fixWhiteScreenKeepCode(t);
       results.push(r);
     } catch (e) {
@@ -665,7 +698,7 @@ router.post('/adb/restore-launcher', async (req, res) => {
   }
 
   const settings = DataStore.getSettings();
-  const targetPackage = settings.smartDisplayPackage || 'vn.adtcreative.hongngocdisplay';
+  const targetPackage = getLauncherPackage();
   const autoFixWhiteScreen = settings.autoFixWhiteScreen !== false;
 
   if (target) {
@@ -695,6 +728,7 @@ router.post('/adb/restore-launcher', async (req, res) => {
 router.get('/adb/device-info', async (req, res) => {
   const { target } = req.query;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target' });
+  await ensureConnected(target);
   const info = await adb.getDeviceInfo(target);
   res.json({ success: true, info });
 });
@@ -702,7 +736,7 @@ router.get('/adb/device-info', async (req, res) => {
 router.get('/adb/packages', async (req, res) => {
   const { target, all } = req.query;
   if (!target) return res.status(400).json({ success: false, message: 'Thiếu target' });
-  await adb.connect(target, 5555);
+  await ensureConnected(target);
   const showAll = all === 'true' || all === '1' || all === undefined;
   const result = await adb.listInstalledPackages(target, !showAll);
   res.json(result);
@@ -711,6 +745,7 @@ router.get('/adb/packages', async (req, res) => {
 router.post('/adb/uninstall', async (req, res) => {
   const { target, packageName } = req.body;
   if (!target || !packageName) return res.status(400).json({ success: false, message: 'Thiếu target hoặc packageName' });
+  await ensureConnected(target);
   const result = await adb.uninstallPackage(target, packageName);
   res.json(result);
 });
@@ -784,6 +819,7 @@ router.post('/adb/install-apk', async (req, res) => {
     return res.status(400).json({ success: false, message: `File ${apk.fileName} chưa có trong thư mục apks/` });
   }
 
+  await ensureConnected(target);
   const result = await adb.installApk(target, apkPath, { grantPermissions: !!grantPermissions });
   res.json(result);
 });
@@ -794,9 +830,12 @@ router.get('/settings', (req, res) => {
 });
 
 router.post('/settings', (req, res) => {
-  const settings = req.body;
-  DataStore.saveSettings(settings);
-  res.json({ success: true, settings });
+  // FIX: merge thay vì ghi đè toàn bộ — tránh xóa mất smartDisplayPackage / watchdog settings
+  const merged = { ...DataStore.getSettings(), ...req.body };
+  DataStore.saveSettings(merged);
+  // Áp dụng lại interval/enabled watchdog nếu có đổi
+  initWatchdogTimer();
+  res.json({ success: true, settings: merged });
 });
 
 module.exports = router;

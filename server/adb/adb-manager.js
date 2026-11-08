@@ -63,10 +63,10 @@ class AdbManager {
   async getConnectedDevices() {
     const res = await this.execCommand(['devices', '-l']);
     if (!res.success) return [];
-    
+
     const lines = res.stdout.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('List of devices'));
     const devices = [];
-    
+
     for (const line of lines) {
       const parts = line.split(/\s+/);
       if (parts.length >= 2) {
@@ -75,7 +75,7 @@ class AdbManager {
         const modelMatch = line.match(/model:(\S+)/);
         const deviceMatch = line.match(/device:(\S+)/);
         const ip = id.includes(':') ? id.split(':')[0] : id;
-        
+
         devices.push({
           serial: id,
           ip: ip,
@@ -134,13 +134,13 @@ class AdbManager {
       const adbBin = this.getAdbPath();
       const targetArgs = this.getTargetArg(target);
       const child = spawn(adbBin, [...targetArgs, 'shell'], { windowsHide: true, timeout: options.timeout || 30000 });
-      
+
       let stdout = '';
       let stderr = '';
-      
+
       child.stdout.on('data', (d) => stdout += d.toString());
       child.stderr.on('data', (d) => stderr += d.toString());
-      
+
       child.on('close', (code) => {
         resolve({
           success: code === 0,
@@ -149,15 +149,64 @@ class AdbManager {
           code
         });
       });
-      
+
       child.on('error', (err) => {
         resolve({ success: false, error: err.message });
       });
-      
+
       const fullScript = `su\n${scriptContent}\nexit\nexit\n`;
       child.stdin.write(fullScript);
       child.stdin.end();
     });
+  }
+
+  // FIX: Chạy script nhiều dòng TRỰC TIẾP trên shell thiết bị (qua stdin của adb shell).
+  // Dùng cho script có ; | || && 2>/dev/null — cmd.exe Windows sẽ nuốt các ký tự này nếu đưa qua execCommand.
+  execDeviceShell(target, scriptContent, options = {}) {
+    return new Promise((resolve) => {
+      const adbBin = this.getAdbPath();
+      const targetArgs = this.getTargetArg(target);
+      const child = spawn(adbBin, [...targetArgs, 'shell'], { windowsHide: true });
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) { try { child.kill(); } catch (_) {} }
+      }, options.timeout || 15000);
+
+      child.stdout.on('data', (d) => stdout += d.toString());
+      child.stderr.on('data', (d) => stderr += d.toString());
+
+      child.on('close', (code) => {
+        settled = true;
+        clearTimeout(timer);
+        resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code });
+      });
+      child.on('error', (err) => {
+        settled = true;
+        clearTimeout(timer);
+        resolve({ success: false, error: err.message });
+      });
+
+      child.stdin.write(scriptContent + '\nexit\n');
+      child.stdin.end();
+    });
+  }
+
+  // FIX: Đọc giờ thiết bị dạng %Y%m%d%H%M%S -> Date (để so khớp với giờ máy chủ, không phụ thuộc locale)
+  async readDeviceTime(target) {
+    const res = await this.execDeviceShell(target, 'date +%Y%m%d%H%M%S', { timeout: 5000 });
+    const digits = (res.stdout || '').replace(/\D/g, '');
+    if (digits.length !== 14) return null;
+    return new Date(
+      parseInt(digits.slice(0, 4), 10),
+      parseInt(digits.slice(4, 6), 10) - 1,
+      parseInt(digits.slice(6, 8), 10),
+      parseInt(digits.slice(8, 10), 10),
+      parseInt(digits.slice(10, 12), 10),
+      parseInt(digits.slice(12, 14), 10)
+    );
   }
 
   async factoryReset(target, mode = 'android8') {
@@ -168,7 +217,7 @@ class AdbManager {
       const res8 = await this.execSuScript(target, `${cmd8}\n${cmd8}`);
       // Also send direct broadcast without su as fallback
       await this.execCommand([...targetArgs, 'shell', cmd8]);
-      
+
       if (mode === 'android8') {
         return {
           success: true,
@@ -271,7 +320,7 @@ reboot
   async setAutoStartApp(target, packageName) {
     if (!packageName) return { success: false, message: 'Chưa chọn package ứng dụng' };
     const targetArgs = this.getTargetArg(target);
-    
+
     // 1. Find launcher activity for this package
     const dumpRes = await this.execCommand([...targetArgs, 'shell', `cmd package resolve-activity --brief ${packageName}`]);
     let activityName = '';
@@ -308,7 +357,7 @@ am start -n ${activityName || packageName}
 `;
 
     const suRes = await this.execSuScript(target, script);
-    
+
     // Also run direct commands via shell as fallback
     if (activityName) {
       await this.execCommand([...targetArgs, 'shell', `cmd package set-home-activity ${activityName}`]);
@@ -327,7 +376,7 @@ am start -n ${activityName || packageName}
 
   findSystemDirectory(startDir) {
     if (!startDir || !fs.existsSync(startDir)) return null;
-    
+
     // Check if direct system subdirectory exists
     const directSystem = path.join(startDir, 'system');
     if (fs.existsSync(directSystem) && fs.statSync(directSystem).isDirectory()) {
@@ -335,7 +384,7 @@ am start -n ${activityName || packageName}
         return directSystem;
       }
     }
-    
+
     // Check if startDir itself is the system folder
     if (fs.existsSync(path.join(startDir, 'priv-app')) || fs.existsSync(path.join(startDir, 'framework'))) {
       return startDir;
@@ -365,10 +414,7 @@ am start -n ${activityName || packageName}
       path.join(process.cwd(), 'packages'),
       path.join(process.cwd(), 'packages/pico-8.1'),
       path.join(__dirname, '../../packages'),
-      path.join(__dirname, '../../packages/pico-8.1'),
-      'E:\\smartdisplay\\packages',
-      'E:\\smartdisplay\\dist\\packages',
-      'C:\\pico-8.1'
+      path.join(__dirname, '../../packages/pico-8.1')
     ];
 
     for (const c of candidates) {
@@ -380,7 +426,7 @@ am start -n ${activityName || packageName}
 
   async installOpenGApps(target, customPath = '', autoReset = true) {
     const targetArgs = this.getTargetArg(target);
-    
+
     let systemDir = customPath ? this.findSystemDirectory(customPath) : this.getOpenGAppsPicoPath();
 
     if (!systemDir || !fs.existsSync(systemDir)) {
@@ -392,7 +438,7 @@ am start -n ${activityName || packageName}
 
     // 1. Root
     await this.execCommand([...targetArgs, 'root']);
-    
+
     // 2. Remount
     const remountRes = await this.execCommand([...targetArgs, 'remount']);
     if (!remountRes.success && !remountRes.stdout.toLowerCase().includes('remount succeeded')) {
@@ -467,19 +513,21 @@ am start -n ${activityName || packageName}
     };
   }
 
-  async restartApp(target, packageName = 'vn.adtcreative.hongngocdisplay') {
+  async restartApp(target, packageName) {
+    const pkg = packageName || DataStore.getSettings()?.smartDisplayPackage || 'vn.adtcreative.hongngocdisplay';
     const targetArgs = this.getTargetArg(target);
-    await this.execCommand([...targetArgs, 'shell', 'am', 'force-stop', packageName]);
-    const launchRes = await this.execCommand([...targetArgs, 'shell', 'monkey', '-p', packageName, '-c', 'android.intent.category.LAUNCHER', '1']);
+    await this.execCommand([...targetArgs, 'shell', 'am', 'force-stop', pkg]);
+    const launchRes = await this.execCommand([...targetArgs, 'shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1']);
     return {
       success: launchRes.success && !launchRes.stdout.includes('No activities found'),
       output: launchRes.stdout || launchRes.stderr
     };
   }
 
-  async clearAppData(target, packageName = 'vn.adtcreative.hongngocdisplay') {
+  async clearAppData(target, packageName) {
+    const pkg = packageName || DataStore.getSettings()?.smartDisplayPackage || 'vn.adtcreative.hongngocdisplay';
     const targetArgs = this.getTargetArg(target);
-    const res = await this.execCommand([...targetArgs, 'shell', 'pm', 'clear', packageName]);
+    const res = await this.execCommand([...targetArgs, 'shell', 'pm', 'clear', pkg]);
     const success = res.stdout.toLowerCase().includes('success');
     return {
       success,
@@ -499,14 +547,15 @@ am start -n ${activityName || packageName}
     if (keyNameOrAction === 'ACTION_RESET_MENU') {
       return await this.execCommand([...targetArgs, 'shell', 'am', 'start', '-a', 'android.settings.BACKUP_AND_RESET_SETTINGS']);
     }
+    // FIX: 2 lệnh liền nhau phải chạy qua execDeviceShell — cmd.exe nuốt dấu ';' nếu đưa qua execCommand
     if (keyNameOrAction === 'KEYCODE_WAKEUP' || keyNameOrAction === 'ACTION_WAKEUP') {
-      return await this.execCommand([...targetArgs, 'shell', 'input keyevent 224; input keyevent 82']);
+      return await this.execDeviceShell(target, 'input keyevent 224\ninput keyevent 82');
     }
     if (keyNameOrAction === 'KEYCODE_MENU') {
-      return await this.execCommand([...targetArgs, 'shell', 'input keyevent 82 || input keyevent 187']);
+      return await this.execDeviceShell(target, 'input keyevent 82\ninput keyevent 187');
     }
     if (keyNameOrAction === 'KEYCODE_APP_SWITCH') {
-      return await this.execCommand([...targetArgs, 'shell', 'input keyevent 187']);
+      return await this.execCommand([...targetArgs, 'shell', 'input', 'keyevent', '187']);
     }
 
     let code = keyNameOrAction;
@@ -546,7 +595,7 @@ am start -n ${activityName || packageName}
 
       child.stdout.on('data', (data) => chunks.push(data));
       child.stderr.on('data', (data) => errData += data.toString());
-      
+
       child.on('close', (code) => {
         if (code === 0 && chunks.length > 0) {
           const buffer = Buffer.concat(chunks);
@@ -576,7 +625,7 @@ am start -n ${activityName || packageName}
       args.push('-g');
     }
     args.push(apkFilePath);
-    
+
     const res = await this.execCommand(args, { timeout: 120000 });
     const success = res.stdout.toLowerCase().includes('success');
     return {
@@ -600,10 +649,10 @@ am start -n ${activityName || packageName}
     const targetArgs = this.getTargetArg(target);
     const args = [...targetArgs, 'shell', 'pm', 'list', 'packages'];
     if (thirdPartyOnly) args.push('-3');
-    
+
     const res = await this.execCommand(args);
     if (!res.success) return { success: false, error: res.error, packages: [] };
-    
+
     const packages = res.stdout.split('\n')
       .map(l => l.trim().replace(/^package:/, '').replace(/\r/, ''))
       .filter(l => l.length > 0);
@@ -653,51 +702,56 @@ am start -n ${activityName || packageName}
     };
   }
 
-  async syncTime(target) {
+  // FIX: Viết lại toàn bộ — bản cũ gửi `date ... 2>/dev/null || date -s "..."` qua cmd.exe
+  // nên Windows nuốt 2>/dev/null + ||, lệnh date không bao giờ tới được thiết bị.
+  async syncTime(target, timezone = 'Asia/Ho_Chi_Minh') {
     const targetWithPort = target.includes(':') ? target : `${target}:5555`;
     const targetArgs = ['-s', targetWithPort];
 
-    // 1. Ensure connected to ADB first
+    // 1. Đảm bảo đã kết nối ADB
     if (target.includes('.')) {
-      await this.execCommand(['connect', targetWithPort], { timeout: 4000 });
+      await this.execCommand(['connect', targetWithPort], { timeout: 5000 });
     }
 
     const d = new Date();
     const pad = (n) => n.toString().padStart(2, '0');
-    // MMDDhhmmYYYY.ss (Toybox/Toolbox standard)
-    const MM = pad(d.getMonth() + 1);
-    const DD = pad(d.getDate());
-    const hh = pad(d.getHours());
-    const mm = pad(d.getMinutes());
-    const YYYY = d.getFullYear();
-    const ss = pad(d.getSeconds());
-    const timeToybox = `${MM}${DD}${hh}${mm}${YYYY}.${ss}`;
-    // YYYY-MM-DD hh:mm:ss (Alternative Linux standard)
-    const timeStandard = `${YYYY}-${MM}-${DD} ${hh}:${mm}:${ss}`;
+    // Toybox/Busybox: MMDDhhmmYYYY.ss (THÁNG đứng trước) — dùng GIỜ LOCAL, không dùng toISOString()
+    const timeToybox = `${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${d.getFullYear()}.${pad(d.getSeconds())}`;
 
-    // 2. Try direct shell date (works if adbd is already root)
-    let res = await this.execCommand([...targetArgs, 'shell', `date ${timeToybox} 2>/dev/null || date -s "${timeStandard}" 2>/dev/null`], { timeout: 4000 });
-    let success = res.success && !res.stderr.includes('Operation not permitted') && !res.stderr.includes('error');
+    // Script chạy TRÊN THIẾT BỊ — tắt NTP trước để không bị ghi đè, set timezone, rồi set giờ
+    const script = [
+      'settings put global auto_time 0',
+      'settings put global auto_time_zone 0',
+      `setprop persist.sys.timezone ${timezone}`,
+      `date ${timeToybox}`,
+      'date'
+    ].join('\n');
 
-    // 3. If failed/permission denied, elevate via adb root (bypass SuperSU/Magisk dialog popup on screen)
-    if (!success) {
+    // 2. Cách 1: qua su (SuperSU/Magisk) — script đi vào stdin của adb shell nên ; | 2>/dev/null đều chạy đúng phía thiết bị
+    await this.execSuScript(target, script);
+
+    let devTime = await this.readDeviceTime(target);
+    let ok = devTime && Math.abs(devTime.getTime() - Date.now()) < 120000;
+
+    // 3. Cách 2 (fallback): adb root rồi chạy thẳng shell thường
+    if (!ok) {
       await this.execCommand([...targetArgs, 'root'], { timeout: 4000 });
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      // Reconnect TCP port 5555 after adb root
+      await new Promise(r => setTimeout(r, 1500));
       if (target.includes('.')) {
         await this.execCommand(['connect', targetWithPort], { timeout: 4000 });
       }
-      // Re-run date under adb root
-      res = await this.execCommand([...targetArgs, 'shell', `date ${timeToybox} 2>/dev/null || date -s "${timeStandard}" 2>/dev/null`], { timeout: 4000 });
-      success = res.success && !res.stderr.includes('Operation not permitted') && !res.stderr.includes('error');
+      await this.execDeviceShell(target, script);
+      devTime = await this.readDeviceTime(target);
+      ok = devTime && Math.abs(devTime.getTime() - Date.now()) < 120000;
     }
 
-    // 4. Force System Clock Sync via Android Settings provider
-    await this.execCommand([...targetArgs, 'shell', `settings put global auto_time 0 2>/dev/null`], { timeout: 3000 });
-
     return {
-      success,
-      output: res.stdout || res.stderr || (success ? 'Đồng bộ giờ thành công' : 'Thất bại')
+      success: ok,
+      sentStamp: timeToybox,
+      deviceTime: devTime ? devTime.toString() : '(không đọc được)',
+      output: ok
+        ? `Đã đồng bộ giờ thành công! Giờ thiết bị: ${devTime}`
+        : `Đã gửi lệnh nhưng giờ thiết bị chưa khớp máy chủ (hiện tại: ${devTime || 'n/a'}). Thiết bị cần quyền root (su hoặc adb root) để đặt giờ.`
     };
   }
 
@@ -739,6 +793,10 @@ am start -n ${activityName || packageName}
    * Kiểm tra xem màn hình đang chạy Launcher SmartDisplay hay bị văng ra ngoài,
    * hoặc có bị tắt màn hình (Asleep) hay bị lỗi trắng màn (Day ngoài khoảng) không.
    * Nếu phát hiện lỗi, tự động phục hồi và sửa lỗi ngay tại chỗ mà KHÔNG mất Mã KH!
+   *
+   * FIX: Mọi lệnh có ký tự đặc biệt (; | || 2>/dev/null) chuyển sang execDeviceShell —
+   * cmd.exe Windows nuốt các ký tự này nên bước phục hồi launcher cũ không bao giờ chạy.
+   * FIX: Bỏ hardcode .SplashActivity — máy thật chạy .MainActivity, dùng monkey tự resolve.
    */
   async checkAndRestoreLauncher(target, targetPackage = 'vn.adtcreative.hongngocdisplay', autoFixWhiteScreen = true, autoDisconnect = true) {
     const targetWithPort = target.includes(':') ? target : `${target}:5555`;
@@ -759,18 +817,19 @@ am start -n ${activityName || packageName}
         }
       }
 
-      // 2. Đánh thức màn hình và cấu hình không bao giờ tắt (tránh lỗi ngủ màn hình Android 10)
+      // 2. Đánh thức màn hình và cấu hình không bao giờ tắt (tránh lỗi ngủ màn hình)
+      const keepAwake = 'settings put system screen_off_timeout 2147483647\nsettings put global stay_on_while_plugged_in 7';
       const powerRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'power'], { timeout: 3500 });
       const powerText = (powerRes.stdout || '');
       const isAsleep = powerText.includes('mWakefulness=Asleep') || powerText.includes('Display Power: state=OFF');
       if (isAsleep) {
-        await this.execCommand([...targetArgs, 'shell', 'input keyevent KEYCODE_WAKEUP ; wm dismiss-keyguard ; settings put system screen_off_timeout 2147483647 ; settings put global stay_on_while_plugged_in 7 2>/dev/null'], { timeout: 4000 });
+        await this.execDeviceShell(target, 'input keyevent KEYCODE_WAKEUP\nwm dismiss-keyguard\n' + keepAwake, { timeout: 6000 });
       } else {
-        await this.execCommand([...targetArgs, 'shell', 'settings put system screen_off_timeout 2147483647 ; settings put global stay_on_while_plugged_in 7 2>/dev/null'], { timeout: 3000 });
+        await this.execDeviceShell(target, keepAwake, { timeout: 5000 });
       }
 
       // 3. Lấy top window / activity đang hiển thị trên màn hình
-      const windowRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 7000 });
+      const windowRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 10000 });
       const fullText = (windowRes.stdout || '') + ' ' + (windowRes.stderr || '');
 
       // Trích xuất dòng mCurrentFocus hoặc mFocusedApp
@@ -778,9 +837,9 @@ am start -n ${activityName || packageName}
       const focusLine = focusMatch ? focusMatch[0].trim() : '';
 
       // Kiểm tra xem màn hình hiện tại có ĐANG FOCUS vào SmartDisplay không
-      const isInSmartDisplay = focusLine.includes(targetPackage) || focusLine.includes('vn.adtcreative.hongngocdisplay');
+      const isInSmartDisplay = focusLine.includes(targetPackage) || focusLine.includes('hongngocdisplay');
 
-      // 4. Nếu ĐANG ở trong SmartDisplay: Kiểm tra xem có bị lỗi TRẮNG MÀN HÌNH (Day ngoài khoảng) không
+      // 4. Nếu ĐANG ở trong SmartDisplay: Kiểm tra lỗi TRẮNG MÀN HÌNH (Day ngoài khoảng)
       if (isInSmartDisplay) {
         if (autoFixWhiteScreen) {
           const logRes = await this.execCommand([...targetArgs, 'shell', 'logcat', '-d', '-t', '150'], { timeout: 3500 });
@@ -794,7 +853,7 @@ am start -n ${activityName || packageName}
               target,
               status: fixRes.success ? 'fixed_white_screen' : 'error',
               currentFocus: focusLine,
-              message: fixRes.success 
+              message: fixRes.success
                 ? 'Phát hiện lỗi trắng màn (Day ngoài khoảng) -> Đã tự động sửa & tải lại nội dung thành công (Giữ Mã KH)!'
                 : `Phát hiện lỗi trắng màn nhưng sửa thất bại: ${fixRes.message}`
             };
@@ -811,16 +870,16 @@ am start -n ${activityName || packageName}
       }
 
       // 5. Nếu bị OUT Launcher -> Phục hồi lại Launcher đa tầng
-      // Bước A: Nhấn nút Home (KEYCODE_HOME = 3). Vì SmartDisplay là Launcher mặc định, nút Home sẽ ngay lập tức đưa về SmartDisplay!
-      await this.execCommand([...targetArgs, 'shell', 'input keyevent 3'], { timeout: 3000 });
+      // Bước A: Nhấn nút Home (KEYCODE_HOME = 3). SmartDisplay là Launcher mặc định nên Home sẽ đưa về app ngay.
+      await this.execCommand([...targetArgs, 'shell', 'input', 'keyevent', '3'], { timeout: 3000 });
       await new Promise(r => setTimeout(r, 1000));
 
       // Kiểm tra xem đã về SmartDisplay chưa
-      let recheckRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 5000 });
+      let recheckRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 10000 });
       let recheckText = (recheckRes.stdout || '');
-      let restored = recheckText.includes(`${targetPackage}/`) || recheckText.includes(targetPackage) || recheckText.includes('vn.adtcreative.hongngocdisplay');
+      let restored = recheckText.includes(`${targetPackage}/`) || recheckText.includes(targetPackage);
 
-      // Bước B: Nếu vẫn chưa về (ví dụ app đè lên như YouTube, itrapps), tắt app đè và gọi trực tiếp Intent Launcher
+      // Bước B: Nếu vẫn chưa về (ví dụ app đè lên như YouTube), tắt app đè và mở lại launcher
       if (!restored) {
         const curFocusMatch = recheckText.match(/mCurrentFocus[^\r\n]+/i) || recheckText.match(/mFocusedApp[^\r\n]+/i);
         const curFocus = curFocusMatch ? curFocusMatch[0] : '';
@@ -831,12 +890,16 @@ am start -n ${activityName || packageName}
           await this.execCommand([...targetArgs, 'shell', `am force-stop ${competingPkg}`], { timeout: 3000 });
         }
 
-        await this.execCommand([...targetArgs, 'shell', `am start -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null ; am start -n ${targetPackage}/.SplashActivity -f 0x10000000 2>/dev/null || monkey -p ${targetPackage} -c android.intent.category.LAUNCHER 1 2>/dev/null`], { timeout: 5000 });
-        await new Promise(r => setTimeout(r, 1500));
+        // FIX: KHÔNG hardcode .SplashActivity (máy thật chạy .MainActivity) — để monkey tự resolve activity launcher
+        await this.execDeviceShell(target,
+          'am start -a android.intent.action.MAIN -c android.intent.category.HOME\n' +
+          `monkey -p ${targetPackage} -c android.intent.category.LAUNCHER 1`,
+          { timeout: 8000 });
+        await new Promise(r => setTimeout(r, 2000));
 
-        recheckRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 5000 });
+        recheckRes = await this.execCommand([...targetArgs, 'shell', 'dumpsys', 'window'], { timeout: 10000 });
         recheckText = (recheckRes.stdout || '');
-        restored = recheckText.includes(`${targetPackage}/`) || recheckText.includes(targetPackage) || recheckText.includes('vn.adtcreative.hongngocdisplay');
+        restored = recheckText.includes(`${targetPackage}/`) || recheckText.includes(targetPackage);
       }
 
       // 6. Nếu vừa phục hồi vào lại app, kiểm tra xem có bị trắng màn không
@@ -849,7 +912,7 @@ am start -n ${activityName || packageName}
             target,
             status: fixRes.success ? 'fixed_white_screen' : 'restored',
             previousFocus: focusLine || 'Màn hình ngoài/Desktop',
-            message: fixRes.success 
+            message: fixRes.success
               ? 'Đã phục hồi Launcher và tự động sửa luôn lỗi trắng màn hình (Giữ Mã KH)!'
               : 'Đã phục hồi Launcher.'
           };
@@ -861,7 +924,7 @@ am start -n ${activityName || packageName}
         target,
         status: restored ? 'restored' : 'failed',
         previousFocus: focusLine || 'Màn hình ngoài/Desktop',
-        message: restored 
+        message: restored
           ? `Đã tự động phục hồi đưa về Launcher ${targetPackage} thành công!`
           : `Phát hiện out Launcher (${focusLine || 'Desktop'}) nhưng chưa thể tự mở lại.`
       };
@@ -876,37 +939,44 @@ am start -n ${activityName || packageName}
 
   /**
    * Sửa lỗi trắng màn hình / treo cập nhật mà KHÔNG làm mất Mã Kích Hoạt (Mã KH).
-   * 1. Giữ nguyên token kích hoạt trong Authorization.xml.
-   * 2. Xóa sạch cờ lịch phát cũ/lỗi (date_between_start, flag_download_success, is_check_loadding).
-   * 3. Xóa CSDL Realm cũ/lỗi (smartdisplay.realm*), cache tạm và file .temp.
-   * 4. Bật màn hình và cấu hình không bao giờ tắt (screen_off_timeout = 2147483647, stay_on_while_plugged_in = 7).
-   * 5. Khởi động lại SplashActivity để tự động đồng bộ lại lịch phát mới từ máy chủ Hồng Ngọc.
+   * FIX: Đọc Authorization.xml qua execSuScript (stdin) thay vì chuỗi có || 2>/dev/null qua cmd.exe.
+   * FIX: Parse UID bằng JS thay vì pipe sang awk (cmd.exe nuốt ký tự |).
+   * FIX: Mở lại app bằng monkey (tự resolve activity thật) thay vì hardcode .SplashActivity.
    */
   async fixWhiteScreenKeepCode(target) {
     const targetWithPort = target.includes(':') ? target : `${target}:5555`;
     const targetArgs = ['-s', targetWithPort];
     const ip = target.includes(':') ? target.split(':')[0] : target;
+    const PKG = 'vn.adtcreative.hongngocdisplay';
+    const APP_DATA = `/data/data/${PKG}`;
+    const AUTH_PATH = `${APP_DATA}/shared_prefs/Authorization.xml`;
 
     // 1. Đảm bảo kết nối ADB
     if (target.includes('.')) {
       await this.execCommand(['connect', targetWithPort], { timeout: 4000 });
     }
 
-    // 2. Bật màn hình và thiết lập không bao giờ tắt màn hình trên Android 10
-    await this.execCommand([...targetArgs, 'shell', 'input keyevent KEYCODE_WAKEUP ; wm dismiss-keyguard ; settings put system screen_off_timeout 2147483647 ; settings put global stay_on_while_plugged_in 7 2>/dev/null']);
+    // 2. Bật màn hình và thiết lập không bao giờ tắt màn hình
+    await this.execDeviceShell(target, 'input keyevent KEYCODE_WAKEUP\nwm dismiss-keyguard\nsettings put system screen_off_timeout 2147483647\nsettings put global stay_on_while_plugged_in 7', { timeout: 6000 });
 
     // 3. Tắt ứng dụng SmartDisplay
-    await this.execCommand([...targetArgs, 'shell', 'am force-stop vn.adtcreative.hongngocdisplay']);
+    await this.execCommand([...targetArgs, 'shell', 'am', 'force-stop', PKG]);
 
     // 4. Trích xuất Authorization.xml hiện tại để lấy device_token_smart
+    let authText = '';
+    const suRead = await this.execSuScript(target, `cat ${AUTH_PATH}`);
+    authText = suRead.stdout || '';
+    if (!authText.includes('<map')) {
+      // Fallback: shell thường (máy đã root adbd)
+      const plainRead = await this.execDeviceShell(target, `cat ${AUTH_PATH}`);
+      authText = plainRead.stdout || '';
+    }
+
     let token = '';
     let typeDisplay = 2;
     let typeTouch = 1;
     let totalCellLayout = 1;
     let wifiAddress = ip;
-
-    const readAuthRes = await this.execCommand([...targetArgs, 'shell', 'su root cat /data/data/vn.adtcreative.hongngocdisplay/shared_prefs/Authorization.xml 2>/dev/null || cat /data/data/vn.adtcreative.hongngocdisplay/shared_prefs/Authorization.xml 2>/dev/null']);
-    const authText = (readAuthRes.stdout || '');
 
     const tokenMatch = authText.match(/name="device_token_smart">([^<]+)</);
     if (tokenMatch) {
@@ -941,28 +1011,44 @@ am start -n ${activityName || packageName}
     }
 
     // 5. Tạo nội dung Authorization.xml sạch (CHỈ giữ token và cấu hình gốc, xóa sạch ngày/cờ download cũ)
-    const cleanXml = `<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\\n<map>\\n    <string name="device_token_smart">${token}</string>\\n    <int name="type_display" value="${typeDisplay}" />\\n    <string name="device_wifi_address">${wifiAddress}</string>\\n    <int name="type_touch" value="${typeTouch}" />\\n    <int name="total_cell_layout" value="${totalCellLayout}" />\\n</map>`;
+    const cleanXml = [
+      "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>",
+      '<map>',
+      `    <string name="device_token_smart">${token}</string>`,
+      `    <int name="type_display" value="${typeDisplay}" />`,
+      `    <string name="device_wifi_address">${wifiAddress}</string>`,
+      `    <int name="type_touch" value="${typeTouch}" />`,
+      `    <int name="total_cell_layout" value="${totalCellLayout}" />`,
+      '</map>'
+    ].join('\n');
 
-    // Ghi trực tiếp hoặc qua file tạm
+    // Ghi file tạm local rồi push lên /sdcard
     const tmpLocal = path.join(ROOT_DIR, `temp_auth_${Date.now()}_${Math.random().toString(36).substr(2, 5)}.xml`);
-    fs.writeFileSync(tmpLocal, cleanXml.replace(/\\n/g, '\n'), 'utf8');
+    fs.writeFileSync(tmpLocal, cleanXml, 'utf8');
     await this.execCommand([...targetArgs, 'push', `"${tmpLocal}"`, '/sdcard/Authorization.xml']);
     try { fs.unlinkSync(tmpLocal); } catch (e) {}
 
-    // 6. Ghi đè vào data app và xoá database Realm lỗi, cache lỗi
-    const applyCmd = `su root sh -c "cp /sdcard/Authorization.xml /data/data/vn.adtcreative.hongngocdisplay/shared_prefs/Authorization.xml && rm -f /data/data/vn.adtcreative.hongngocdisplay/files/smartdisplay.realm* && rm -rf /data/data/vn.adtcreative.hongngocdisplay/cache/* && rm -f /data/data/vn.adtcreative.hongngocdisplay/app_mediahome/*.temp && chmod 660 /data/data/vn.adtcreative.hongngocdisplay/shared_prefs/Authorization.xml && rm -f /sdcard/Authorization.xml"`;
-    await this.execCommand([...targetArgs, 'shell', applyCmd]);
+    // 6. Ghi đè vào data app và xoá database Realm lỗi, cache lỗi (chạy dưới quyền root)
+    const applyScript = [
+      `cp /sdcard/Authorization.xml ${AUTH_PATH}`,
+      `rm -f ${APP_DATA}/files/smartdisplay.realm*`,
+      `rm -rf ${APP_DATA}/cache/*`,
+      `rm -f ${APP_DATA}/app_mediahome/*.temp`,
+      `chmod 660 ${AUTH_PATH}`,
+      'rm -f /sdcard/Authorization.xml'
+    ].join('\n');
+    await this.execSuScript(target, applyScript);
 
-    // Lấy UID thực tế của app để chown chính xác
-    const getUidCmd = `su root ls -ld /data/data/vn.adtcreative.hongngocdisplay | awk '{print $3}'`;
-    const uidRes = await this.execCommand([...targetArgs, 'shell', getUidCmd]);
-    const appUid = (uidRes.stdout || '').trim();
-    if (appUid && appUid.startsWith('u0_')) {
-      await this.execCommand([...targetArgs, 'shell', `su root chown ${appUid}:${appUid} /data/data/vn.adtcreative.hongngocdisplay/shared_prefs/Authorization.xml`]);
+    // Lấy UID thực tế của app để chown chính xác — parse bằng JS, KHÔNG pipe sang awk
+    const lsRes = await this.execSuScript(target, `ls -ld ${APP_DATA}`);
+    const lsLine = ((lsRes.stdout || '').split('\n').find(l => l.trim().startsWith('drw')) || '').trim();
+    const appUid = lsLine ? (lsLine.split(/\s+/)[2] || '') : '';
+    if (appUid && /^u\d+_/.test(appUid)) {
+      await this.execSuScript(target, `chown ${appUid}:${appUid} ${AUTH_PATH}`);
     }
 
-    // 7. Khởi động lại ứng dụng SplashActivity
-    await this.execCommand([...targetArgs, 'shell', 'am start -n vn.adtcreative.hongngocdisplay/.SplashActivity']);
+    // 7. Khởi động lại ứng dụng — monkey tự tìm activity THẬT (.MainActivity trên máy của mày)
+    await this.execDeviceShell(target, `monkey -p ${PKG} -c android.intent.category.LAUNCHER 1`);
 
     return {
       success: true,

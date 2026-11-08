@@ -32,7 +32,6 @@ function readJson(file, defaultVal = []) {
   return defaultVal;
 }
 
-let saveTimer = null;
 function writeJson(file, data) {
   try {
     fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');

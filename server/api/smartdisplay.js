@@ -3,14 +3,21 @@ const DataStore = require('../storage/data-store');
 
 class SmartDisplayApi {
   constructor() {
-    this.settings = DataStore.getSettings();
-    this.baseUrl = (this.settings.apiDomain || 'http://api-smart-display.hongngochospital.vn/').replace(/\/+$/, '');
     this.token = null;
+  }
+
+  getBaseUrl() {
+    const settings = DataStore.getSettings();
+    return (settings.apiDomain || 'http://api-smart-display.hongngochospital.vn/').replace(/\/+$/, '');
+  }
+
+  get baseUrl() {
+    return this.getBaseUrl();
   }
 
   async login(username, password) {
     try {
-      const url = `${this.baseUrl}/api/v1/customer/login`;
+      const url = `${this.getBaseUrl()}/api/v1/customer/login`;
       const resp = await axios.post(url, {
         username,
         password

@@ -4,7 +4,6 @@ const { exec } = require('child_process');
 function checkPort(host, port = 5555, timeout = 1000) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
-    let status = false;
 
     socket.setTimeout(timeout);
     socket.on('connect', () => {

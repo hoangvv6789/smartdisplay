@@ -42,6 +42,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const WebSocket = require('ws');
+const adb = require('./adb/adb-manager');
 const routes = require('./api/routes');
 
 const app = express();
@@ -81,8 +82,31 @@ app.use((err, req, res, next) => {
 });
 
 wss.on('connection', (ws) => {
+  let logcatProc = null;
+
   ws.on('message', (message) => {
-    // Handle WS messages
+    try {
+      const data = JSON.parse(message);
+      if (data.action === 'start_logcat' && data.target) {
+        if (logcatProc) {
+          try { logcatProc.kill(); } catch (e) {}
+          logcatProc = null;
+        }
+        logcatProc = adb.streamLogcat(data.target, ws, { level: data.level });
+      } else if (data.action === 'stop_logcat') {
+        if (logcatProc) {
+          try { logcatProc.kill(); } catch (e) {}
+          logcatProc = null;
+        }
+      }
+    } catch (e) {}
+  });
+
+  ws.on('close', () => {
+    if (logcatProc) {
+      try { logcatProc.kill(); } catch (e) {}
+      logcatProc = null;
+    }
   });
 });
 
