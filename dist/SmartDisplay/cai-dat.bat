@@ -1,75 +1,78 @@
 @echo off
-title SmartDisplay ADB Manager - Setup
+title SmartDisplay - Setup
 color 0A
 
-echo ============================================================
-echo   SMARTDISPLAY ADB MANAGER - CAI DAT
-echo ============================================================
+echo ============================================
+echo    SMARTDISPLAY ADB MANAGER - SETUP
+echo ============================================
 echo.
 
 cd /d "%~dp0"
 
-echo [1/4] Kiem tra Node.js...
-where node >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo   [X] CHUA CO NODE.JS!
-    echo   Hay tai va cai Node.js LTS tu: https://nodejs.org/
-    echo   Sau do chay lai file nay.
-    echo.
-    pause
-    exit /b 1
-)
-echo   [OK] Node.js san sang
+echo [1] Checking Node.js...
+node -v 2>nul
+if errorlevel 1 goto NO_NODE
+echo [OK] Node.js found
 echo.
 
-echo [2/4] Cai dat thu vien...
-if exist "node_modules" (
-    echo   [OK] Da co node_modules
-) else (
-    call npm install --production --no-audit --no-fund
-    if errorlevel 1 (
-        echo.
-        echo   [X] LOI CAI THU VIEN!
-        echo.
-        pause
-        exit /b 1
-    )
-    echo   [OK] Da cai xong thu vien
-)
+echo [2] Installing dependencies...
+if exist "node_modules" goto SKIP_NPM
+call npm install --production --no-audit --no-fund
+if errorlevel 1 goto NPM_FAIL
+echo [OK] Done
 echo.
 
-echo [3/4] Cai dat tu khoi dong cung Windows...
+:SKIP_NPM
+echo [3] Setting up Windows auto-start...
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "HERE=%~dp0"
 
-echo Set WshShell = CreateObject("WScript.Shell") > "%HERE%AutoStart.vbs"
-echo WshShell.CurrentDirectory = "%HERE%" >> "%HERE%AutoStart.vbs"
-echo WshShell.Run "cmd /c cd /d ""%HERE%"" && node server/server.js", 0, False >> "%HERE%AutoStart.vbs"
-echo WScript.Sleep 2000 >> "%HERE%AutoStart.vbs"
-echo WshShell.Run "http://localhost:8686" >> "%HERE%AutoStart.vbs"
+(
+echo Set o = CreateObject^("WScript.Shell"^)
+echo o.CurrentDirectory = "%~dp0"
+echo o.Run "node server/server.js", 0, False
+) > "%~dp0AutoStart.vbs"
 
-copy /Y "%HERE%AutoStart.vbs" "%STARTUP%\SmartDisplay.vbs" >nul 2>&1
-if errorlevel 1 (
-    echo   [!] Khong copy duoc vao Startup
-    echo   Thu chay file nay bang quyen Administrator
-) else (
-    echo   [OK] Da them vao Startup folder
-)
+copy /Y "%~dp0AutoStart.vbs" "%STARTUP%\SmartDisplay.vbs" >nul 2>&1
+if errorlevel 1 goto STARTUP_FAIL
+echo [OK] Added to Windows Startup
 echo.
 
-echo [4/4] Khoi dong SmartDisplay...
-start "" wscript.exe "%HERE%AutoStart.vbs"
+echo [4] Starting SmartDisplay...
+start "" wscript.exe "%~dp0AutoStart.vbs"
+timeout /t 3 >nul
+start "" "http://localhost:8686"
 
 echo.
-echo ============================================================
-echo   [OK] CAI DAT XONG!
+echo ============================================
+echo    [OK] SETUP COMPLETE!
 echo.
-echo   SmartDisplay dang chay o: http://localhost:8686
-echo   Tu khoi dong cung Windows (khong hien cua so)
+echo    Open browser: http://localhost:8686
+echo    Auto-start with Windows: YES
 echo.
-echo   De TAT app:     chay Tat_SmartDisplay.bat
-echo   De GO cai dat:  chay Go_Cai_Dat.bat
-echo ============================================================
+echo    To STOP:   run Tat_SmartDisplay.bat
+echo    To REMOVE: run Go_Cai_Dat.bat
+echo ============================================
+goto END
+
+:NO_NODE
+echo.
+echo [X] Node.js not found!
+echo Please install Node.js LTS from: https://nodejs.org/
+echo Then run this file again.
+echo.
+goto END
+
+:NPM_FAIL
+echo.
+echo [X] npm install failed! Check your internet connection.
+echo.
+goto END
+
+:STARTUP_FAIL
+echo [!] Cannot copy to Startup folder
+echo Try running this file as Administrator
+echo.
+
+:END
 echo.
 pause
