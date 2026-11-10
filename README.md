@@ -42,15 +42,20 @@ Hệ thống quản lý và điều khiển ADB tập trung dành cho các thi�
 ## 🛠️ Hướng Dẫn Sử Dụng
 
 1. **Khởi động Server**:
-   - Nhấp đúp vào file `start.bat` hoặc chạy lệnh:
+   - Nhấp đúp vào file `start.bat` để tự động chạy máy chủ và mở trình duyệt web.
+   - Hoặc khởi động qua dòng lệnh:
      ```bash
      npm start
      ```
+   - Hoặc chạy trực tiếp file nhị phân độc lập tại `dist\SmartDisplay_ADB_Manager.exe`.
+
 2. **Truy cập Dashboard**:
-   - Mở trình duyệt web và truy cập: **[http://localhost:3000](http://localhost:3000)**
+   - Mở trình duyệt web và truy cập: **[http://localhost:8686](http://localhost:8686)**
+
 3. **Đồng bộ từ Cloud**:
-   - Bấm nút **"Đồng bộ Cloud"** trên góc trên thanh công cụ.
-   - Nhập tài khoản và mật khẩu của hệ thống Smart Display để tải danh sách toàn bộ thiết bị.
+   - Bấm nút **"Cào & Đồng Bộ Dữ Liệu"** trên thanh công cụ.
+   - Đăng nhập hệ thống Smart Display để tải danh sách toàn bộ thiết bị.
+
 4. **Kết nối & Sửa lỗi**:
    - Bấm **"Kết nối ADB"** trên thẻ thiết bị.
-   - Bấm **"Sửa lỗi"** để mở bảng điều khiển với đầy đủ tính năng.
+   - Bấm **"Sửa lỗi"** để mở bảng điều khiển với đầy đủ tính năng: khởi động lại app, xóa cache, đồng bộ giờ, gửi phím, terminal shell.

@@ -32,11 +32,18 @@ function readJson(file, defaultVal = []) {
   return defaultVal;
 }
 
-function writeJson(file, data) {
+function writeJsonAtomic(file, data) {
+  const content = JSON.stringify(data, null, 2);
+  const tmpFile = `${file}.${Date.now()}.${Math.random().toString(36).substr(2, 6)}.tmp`;
   try {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(tmpFile, content, 'utf8');
+    fs.renameSync(tmpFile, file);
   } catch (e) {
-    console.error('Error writing json', file, e);
+    try {
+      if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+    } catch (_) {}
+    console.error('Error writing json atomic', file, e);
+    throw new Error(`Ghi file dữ liệu thất bại: ${e.message}`);
   }
 }
 
@@ -49,37 +56,41 @@ class DataStore {
   }
 
   static saveDevices(devices) {
+    writeJsonAtomic(DEVICES_FILE, devices);
     _cachedDevices = devices;
-    writeJson(DEVICES_FILE, devices);
   }
 
   static upsertDevice(device) {
-    const devices = this.getDevices();
+    const devices = [...this.getDevices()];
     const index = devices.findIndex(d => (d.id && d.id === device.id) || (d.ip && device.ip && d.ip === device.ip));
+    let updated;
     if (index >= 0) {
-      devices[index] = { ...devices[index], ...device, updatedAt: new Date().toISOString() };
+      updated = { ...devices[index], ...device, updatedAt: new Date().toISOString() };
+      devices[index] = updated;
     } else {
-      devices.push({ ...device, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      updated = { ...device, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      devices.push(updated);
     }
     this.saveDevices(devices);
-    return device;
+    return updated;
   }
 
   static updateDevice(id, updateData) {
-    const devices = this.getDevices();
+    const devices = [...this.getDevices()];
     const index = devices.findIndex(d => d.id === id || d.ip === id);
     if (index >= 0) {
-      devices[index] = { ...devices[index], ...updateData, updatedAt: new Date().toISOString() };
+      const updated = { ...devices[index], ...updateData, updatedAt: new Date().toISOString() };
+      devices[index] = updated;
       this.saveDevices(devices);
-      return devices[index];
+      return updated;
     }
     return null;
   }
 
   static deleteDevice(idOrIp) {
     let devices = this.getDevices();
-    devices = devices.filter(d => d.id !== idOrIp && d.ip !== idOrIp);
-    this.saveDevices(devices);
+    const filtered = devices.filter(d => d.id !== idOrIp && d.ip !== idOrIp);
+    this.saveDevices(filtered);
   }
 
   static getApks() {
@@ -100,8 +111,8 @@ class DataStore {
   }
 
   static saveApks(apks) {
+    writeJsonAtomic(APKS_FILE, apks);
     _cachedApks = apks;
-    writeJson(APKS_FILE, apks);
   }
 
   static getSettings() {
@@ -118,8 +129,8 @@ class DataStore {
   }
 
   static saveSettings(settings) {
+    writeJsonAtomic(SETTINGS_FILE, settings);
     _cachedSettings = settings;
-    writeJson(SETTINGS_FILE, settings);
   }
 }
 

@@ -5,10 +5,61 @@ const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
 
+// Wrap router methods to automatically forward unhandled async promise rejections to Express 4 error handler
+['get', 'post', 'put', 'delete'].forEach((method) => {
+  const original = router[method].bind(router);
+  router[method] = function (path, ...handlers) {
+    const wrappedHandlers = handlers.map((h) => {
+      if (typeof h === 'function') {
+        return (req, res, next) => {
+          try {
+            const ret = h(req, res, next);
+            if (ret && typeof ret.catch === 'function') {
+              ret.catch(next);
+            }
+            return ret;
+          } catch (syncErr) {
+            next(syncErr);
+          }
+        };
+      }
+      return h;
+    });
+    return original(path, ...wrappedHandlers);
+  };
+});
+
 const adb = require('../adb/adb-manager');
 const smartDisplayApi = require('./smartdisplay');
 const DataStore = require('../storage/data-store');
 const { checkPort, pingHost, scanSubnet } = require('../utils/ping');
+
+// Input validation helpers to prevent command injection and malformed parameter attacks
+function isValidTarget(target) {
+  if (!target || typeof target !== 'string') return false;
+  const t = target.trim();
+  return /^[a-zA-Z0-9_\.\:\-]+$/.test(t) && t.length <= 100;
+}
+
+function isValidPackageName(pkg) {
+  if (!pkg || typeof pkg !== 'string') return false;
+  const p = pkg.trim();
+  return /^[a-zA-Z0-9_\.]+$/.test(p) && p.length <= 150;
+}
+
+// Admin authorization middleware (active when apiToken is configured in settings)
+function checkAdminAuth(req, res, next) {
+  const settings = DataStore.getSettings();
+  if (!settings.apiToken) {
+    return next(); // Pass through if token auth is not enabled
+  }
+  const token = req.headers['x-api-token'] || 
+                (req.headers.authorization && req.headers.authorization.replace(/^Bearer\s+/i, ''));
+  if (token && token === settings.apiToken) {
+    return next();
+  }
+  return res.status(401).json({ success: false, message: 'Yêu cầu mã xác thực quản trị (API Token không hợp lệ)' });
+}
 
 const isPkg = typeof process.pkg !== 'undefined';
 let ROOT_DIR = isPkg ? path.dirname(process.execPath) : path.join(__dirname, '../..');
@@ -468,15 +519,18 @@ router.post('/devices/ping-all', async (req, res) => {
 // --- ADB Connect / Disconnect ---
 router.post('/adb/connect', async (req, res) => {
   const { ip, port } = req.body;
-  if (!ip) return res.status(400).json({ success: false, message: 'Thiếu địa chỉ IP' });
-  const result = await adb.connect(ip, port || 5555);
+  if (!ip || !isValidTarget(ip)) return res.status(400).json({ success: false, message: 'Địa chỉ IP hoặc target không hợp lệ' });
+  const p = port ? parseInt(port, 10) : 5555;
+  if (isNaN(p) || p <= 0 || p > 65535) return res.status(400).json({ success: false, message: 'Cổng port không hợp lệ' });
+  const result = await adb.connect(ip, p);
   res.json(result);
 });
 
 router.post('/adb/disconnect', async (req, res) => {
   const { ip, port } = req.body;
-  if (!ip) return res.status(400).json({ success: false, message: 'Thiếu địa chỉ IP' });
-  const result = await adb.disconnect(ip, port || 5555);
+  if (!ip || !isValidTarget(ip)) return res.status(400).json({ success: false, message: 'Địa chỉ IP hoặc target không hợp lệ' });
+  const p = port ? parseInt(port, 10) : 5555;
+  const result = await adb.disconnect(ip, p);
   res.json(result);
 });
 
@@ -488,23 +542,25 @@ router.post('/adb/disconnect-all', async (req, res) => {
 // --- ADB Quick Fix & Special Commands ---
 router.post('/adb/reboot', async (req, res) => {
   const { target, mode } = req.body;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
+  const safeMode = ['recovery', 'bootloader', 'sideload', ''].includes(mode) ? mode : '';
   await ensureConnected(target);
-  const result = await adb.reboot(target, mode);
+  const result = await adb.reboot(target, safeMode);
   res.json(result);
 });
 
-router.post('/adb/factory-reset', async (req, res) => {
+router.post('/adb/factory-reset', checkAdminAuth, async (req, res) => {
   const { target, mode = 'android8' } = req.body;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
+  const safeMode = ['android8', 'android10'].includes(mode) ? mode : 'android8';
   await ensureConnected(target);
-  const result = await adb.factoryReset(target, mode);
+  const result = await adb.factoryReset(target, safeMode);
   res.json(result);
 });
 
-router.post('/adb/remove-lockscreen', async (req, res) => {
+router.post('/adb/remove-lockscreen', checkAdminAuth, async (req, res) => {
   const { target } = req.body;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
   await ensureConnected(target);
   const result = await adb.removeLockscreen(target);
   res.json(result);
@@ -512,7 +568,8 @@ router.post('/adb/remove-lockscreen', async (req, res) => {
 
 router.post('/adb/set-autostart-app', async (req, res) => {
   const { target, packageName } = req.body;
-  if (!target || !packageName) return res.status(400).json({ success: false, message: 'Thiếu target device hoặc packageName' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Target không hợp lệ' });
+  if (!packageName || !isValidPackageName(packageName)) return res.status(400).json({ success: false, message: 'Tên package không hợp lệ' });
   await ensureConnected(target);
   const result = await adb.setAutoStartApp(target, packageName);
   res.json(result);
@@ -520,7 +577,7 @@ router.post('/adb/set-autostart-app', async (req, res) => {
 
 router.post('/adb/install-opengapps', async (req, res) => {
   const { target, customPath, autoReset = true } = req.body;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
   await ensureConnected(target);
   const result = await adb.installOpenGApps(target, customPath, autoReset);
   res.json(result);
@@ -528,7 +585,7 @@ router.post('/adb/install-opengapps', async (req, res) => {
 
 router.get('/adb/google-play-status', async (req, res) => {
   const { target } = req.query;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
   await ensureConnected(target);
   const result = await adb.checkGooglePlayStatus(target);
   res.json(result);
@@ -536,7 +593,7 @@ router.get('/adb/google-play-status', async (req, res) => {
 
 router.post('/adb/toggle-google-play', async (req, res) => {
   const { target, enable } = req.body;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
   await ensureConnected(target);
   const result = await adb.toggleGooglePlayServices(target, !!enable);
   res.json(result);
@@ -544,7 +601,7 @@ router.post('/adb/toggle-google-play', async (req, res) => {
 
 router.post('/adb/clear-google-play-cache', async (req, res) => {
   const { target } = req.body;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
   await ensureConnected(target);
   const result = await adb.clearGooglePlayCache(target);
   res.json(result);
@@ -552,19 +609,19 @@ router.post('/adb/clear-google-play-cache', async (req, res) => {
 
 router.post('/adb/restart-app', async (req, res) => {
   const { target, packageName } = req.body;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  // FIX: đọc package từ settings thay vì hardcode
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
   const pkg = packageName || getLauncherPackage();
+  if (!isValidPackageName(pkg)) return res.status(400).json({ success: false, message: 'Tên package không hợp lệ' });
   await ensureConnected(target);
   const result = await adb.restartApp(target, pkg);
   res.json(result);
 });
 
-router.post('/adb/clear-data', async (req, res) => {
+router.post('/adb/clear-data', checkAdminAuth, async (req, res) => {
   const { target, packageName } = req.body;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target device' });
-  // FIX: đọc package từ settings thay vì hardcode
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target device' });
   const pkg = packageName || getLauncherPackage();
+  if (!isValidPackageName(pkg)) return res.status(400).json({ success: false, message: 'Tên package không hợp lệ' });
   await ensureConnected(target);
   const result = await adb.clearAppData(target, pkg);
   res.json(result);
@@ -572,7 +629,7 @@ router.post('/adb/clear-data', async (req, res) => {
 
 router.post('/adb/keyevent', async (req, res) => {
   const { target, key } = req.body;
-  if (!target || !key) return res.status(400).json({ success: false, message: 'Thiếu target hoặc key' });
+  if (!target || !isValidTarget(target) || !key) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai target/key' });
   await ensureConnected(target);
   const result = await adb.sendKey(target, key);
   res.json(result);
@@ -580,7 +637,8 @@ router.post('/adb/keyevent', async (req, res) => {
 
 router.post('/adb/input-text', async (req, res) => {
   const { target, text } = req.body;
-  if (!target || !text) return res.status(400).json({ success: false, message: 'Thiếu target hoặc text' });
+  if (!target || !isValidTarget(target) || typeof text !== 'string') return res.status(400).json({ success: false, message: 'Thiếu hoặc sai target/text' });
+  if (text.length > 500) return res.status(400).json({ success: false, message: 'Văn bản quá dài (tối đa 500 ký tự)' });
   await ensureConnected(target);
   const result = await adb.sendText(target, text);
   res.json(result);
@@ -588,25 +646,27 @@ router.post('/adb/input-text', async (req, res) => {
 
 router.post('/adb/swipe', async (req, res) => {
   const { target, x1, y1, x2, y2, duration = 300 } = req.body;
-  if (!target || x1 === undefined || y1 === undefined || x2 === undefined || y2 === undefined) {
-    return res.status(400).json({ success: false, message: 'Thiếu tọa độ x1, y1, x2, y2' });
+  if (!target || !isValidTarget(target) || !Number.isFinite(Number(x1)) || !Number.isFinite(Number(y1)) || !Number.isFinite(Number(x2)) || !Number.isFinite(Number(y2))) {
+    return res.status(400).json({ success: false, message: 'Target hoặc tọa độ x1, y1, x2, y2 không hợp lệ' });
   }
   await ensureConnected(target);
-  const result = await adb.sendSwipe(target, x1, y1, x2, y2, duration);
+  const result = await adb.sendSwipe(target, Number(x1), Number(y1), Number(x2), Number(y2), Number(duration) || 300);
   res.json(result);
 });
 
 router.post('/adb/tap', async (req, res) => {
   const { target, x, y } = req.body;
-  if (!target || x === undefined || y === undefined) return res.status(400).json({ success: false, message: 'Thiếu tọa độ x, y' });
+  if (!target || !isValidTarget(target) || !Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) {
+    return res.status(400).json({ success: false, message: 'Target hoặc tọa độ x, y không hợp lệ' });
+  }
   await ensureConnected(target);
-  const result = await adb.sendTap(target, x, y);
+  const result = await adb.sendTap(target, Number(x), Number(y));
   res.json(result);
 });
 
 router.get('/adb/screenshot', async (req, res) => {
   const { target } = req.query;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target' });
   await ensureConnected(target);
   const result = await adb.takeScreenshot(target);
   if (result.success) {
@@ -619,9 +679,11 @@ router.get('/adb/screenshot', async (req, res) => {
   res.status(500).json(result);
 });
 
-router.post('/adb/shell', async (req, res) => {
+router.post('/adb/shell', checkAdminAuth, async (req, res) => {
   const { target, command } = req.body;
-  if (!target || !command) return res.status(400).json({ success: false, message: 'Thiếu target hoặc command' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Target không hợp lệ' });
+  if (!command || typeof command !== 'string') return res.status(400).json({ success: false, message: 'Lệnh shell không hợp lệ' });
+  if (command.length > 4000) return res.status(400).json({ success: false, message: 'Lệnh vượt quá độ dài tối đa cho phép' });
   await ensureConnected(target);
   const result = await adb.shell(target, command);
   res.json(result);
@@ -706,7 +768,7 @@ router.post('/adb/restore-launcher', async (req, res) => {
 
 router.get('/adb/device-info', async (req, res) => {
   const { target } = req.query;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target' });
   await ensureConnected(target);
   const info = await adb.getDeviceInfo(target);
   res.json({ success: true, info });
@@ -714,16 +776,17 @@ router.get('/adb/device-info', async (req, res) => {
 
 router.get('/adb/packages', async (req, res) => {
   const { target, all } = req.query;
-  if (!target) return res.status(400).json({ success: false, message: 'Thiếu target' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target' });
   await ensureConnected(target);
   const showAll = all === 'true' || all === '1' || all === undefined;
   const result = await adb.listInstalledPackages(target, !showAll);
   res.json(result);
 });
 
-router.post('/adb/uninstall', async (req, res) => {
+router.post('/adb/uninstall', checkAdminAuth, async (req, res) => {
   const { target, packageName } = req.body;
-  if (!target || !packageName) return res.status(400).json({ success: false, message: 'Thiếu target hoặc packageName' });
+  if (!target || !isValidTarget(target)) return res.status(400).json({ success: false, message: 'Target không hợp lệ' });
+  if (!packageName || !isValidPackageName(packageName)) return res.status(400).json({ success: false, message: 'Tên package không hợp lệ' });
   await ensureConnected(target);
   const result = await adb.uninstallPackage(target, packageName);
   res.json(result);
@@ -785,9 +848,9 @@ router.delete('/apks/:id', (req, res) => {
   res.status(404).json({ success: false, message: 'Không tìm thấy APK' });
 });
 
-router.post('/adb/install-apk', async (req, res) => {
+router.post('/adb/install-apk', checkAdminAuth, async (req, res) => {
   const { target, apkId, grantPermissions } = req.body;
-  if (!target || !apkId) return res.status(400).json({ success: false, message: 'Thiếu target hoặc apkId' });
+  if (!target || !isValidTarget(target) || !apkId) return res.status(400).json({ success: false, message: 'Thiếu hoặc sai định dạng target/apkId' });
 
   const apks = DataStore.getApks();
   const apk = apks.find(a => a.id === apkId);
@@ -808,7 +871,7 @@ router.get('/settings', (req, res) => {
   res.json(DataStore.getSettings());
 });
 
-router.post('/settings', (req, res) => {
+router.post('/settings', checkAdminAuth, (req, res) => {
   // FIX: merge thay vì ghi đè toàn bộ — tránh xóa mất smartDisplayPackage / watchdog settings
   const merged = { ...DataStore.getSettings(), ...req.body };
   DataStore.saveSettings(merged);

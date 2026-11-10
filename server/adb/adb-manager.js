@@ -1,4 +1,4 @@
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const keycodes = require('./keycodes');
@@ -46,8 +46,7 @@ class AdbManager {
   execCommand(args, options = {}) {
     return new Promise((resolve) => {
       const adbBin = this.getAdbPath();
-      const cmd = `"${adbBin}" ${args.join(' ')}`;
-      exec(cmd, { windowsHide: true, timeout: options.timeout || 20000, maxBuffer: 10 * 1024 * 1024, ...options }, (err, stdout, stderr) => {
+      execFile(adbBin, args, { windowsHide: true, timeout: options.timeout || 20000, maxBuffer: 10 * 1024 * 1024, ...options }, (err, stdout, stderr) => {
         resolve({
           success: !err,
           stdout: (stdout || '').toString().trim(),
@@ -119,9 +118,8 @@ class AdbManager {
   }
 
   async shell(target, command) {
-    const targetArgs = this.getTargetArg(target);
-    const res = await this.execCommand([...targetArgs, 'shell', command]);
-    return res;
+    // Chạy lệnh Android shell an toàn qua stdin stream, cách ly hoàn toàn với máy chủ Windows
+    return await this.execDeviceShell(target, command);
   }
 
   async reboot(target, mode = '') {
